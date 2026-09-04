@@ -7,6 +7,40 @@ from models.transaction import TransactionType, TransactionStatus, RefundStatus
 from models.ticket import TicketCategory, TicketPriority, TicketStatus
 from decimal import Decimal
 from agent.embeddings import embed_texts_batch
+from models import CompanyPolicy
+
+def seed_company_policies(db):
+    policies = [
+        ("Refund Policy",
+         "Card refunds are normally processed within 5-7 business days. Failed transactions "
+         "are automatically reversed within 3 business days. Manual refunds require payment verification."),
+
+        ("OTP and SMS Policy",
+         "Customers may request a maximum of 5 OTPs per hour. OTP delivery to international "
+         "phone numbers may be delayed or unsupported depending on carrier agreements."),
+
+        ("Duplicate Charge Policy",
+         "A duplicate charge may reflect a temporary authorization hold rather than an actual "
+         "second capture. Authorization holds are automatically released within 3-5 business days "
+         "if not confirmed as a real charge."),
+
+        ("Account Lockout Policy",
+         "Accounts are automatically locked after 5 failed login attempts within 15 minutes. "
+         "Locked accounts are automatically unlocked after 30 minutes, or can be manually unlocked "
+         "by an agent after identity verification."),
+
+        ("Shipment Delay Escalation Policy",
+         "If a shipment has no carrier scan update for more than 48 hours past the expected "
+         "delivery date, the ticket should be escalated to the logistics team for investigation."),
+    ]
+    texts = [p[1] for p in policies]
+    embeddings = embed_texts_batch(texts, input_type="search_document")
+    for (title, text), embedding in zip(policies, embeddings):
+        db.add(CompanyPolicy(title=title, policy_text=text, embedding=embedding))
+
+    db.commit()
+    print(f"Seeded {len(policies)} company policies.")
+    
 
 def reset_data(db):
     db.query(TicketResolution).delete()
@@ -186,12 +220,12 @@ def main():
     if "--reset" in sys.argv:
         reset_data(db)
 
-    users = seed_users(db)
-    customers = seed_customers(db)
-    seed_transactions(db, customers)
-    tickets = seed_tickets(db, customers, users)
-    seed_resolutions(db, tickets, users)
-
+    # users = seed_users(db)
+    # customers = seed_customers(db)
+    # seed_transactions(db, customers)
+    # tickets = seed_tickets(db, customers, users)
+    # seed_resolutions(db, tickets, users)
+    seed_company_policies(db)
     db.close()
     print("Seeding complete.")
 

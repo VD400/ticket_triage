@@ -24,3 +24,8 @@ class TicketResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
         
+class ManualResolutionRequest(BaseModel):
+    resolution_text: str
+    
+class ClarificationAnswerRequest(BaseModel):
+    answer: str

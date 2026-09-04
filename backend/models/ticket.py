@@ -23,9 +23,10 @@ class TicketStatus(str, enum.Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     AWAITING_APPROVAL = "awaiting_approval"
+    NEEDS_MANUAL_REVIEW = "needs_manual_review"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
     RESOLVED = "resolved"
     FAILED = "failed"
-    REJECTED = "rejected"
 
 class Ticket(Base):
     __tablename__ = "tickets"
