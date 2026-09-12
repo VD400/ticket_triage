@@ -41,7 +41,10 @@ async def create_ticket(payload: TicketCreateRequest, db: Session = Depends(get_
 
 @router.get("/", response_model=List[TicketResponse])
 def list_tickets(db: Session = Depends(get_db), user = Depends(require_role(UserRole.ADMIN, UserRole.AGENT, UserRole.VIEWER))):
-    return db.query(Ticket).order_by(Ticket.created_at.desc()).all()
+    if user.role == UserRole.ADMIN:
+        return db.query(Ticket).order_by(Ticket.created_at.desc()).all()
+    else:
+        return db.query(Ticket).filter(Ticket.assigned_agent_id==user.id).all()
 
 
 @router.post("/ticket", response_model=TicketEventCreate)

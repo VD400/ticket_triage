@@ -7,7 +7,7 @@ def main():
     db = SessionLocal()
 
     # grab any existing ticket that's still QUEUED (one of your seeded ones)
-    ticket = db.query(Ticket).filter(Ticket.status == "queued").first()
+    ticket = db.query(Ticket).filter(Ticket.status == "QUEUED").first()
     if not ticket:
         print("No queued ticket found — check your seed data.")
         return

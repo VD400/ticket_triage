@@ -20,7 +20,7 @@ def rag_over_tickets(query: str,top_k: int = 3) -> list[str]:
         db.close()
     return [row.resolution_text for row in matches]
 
-def  rag_over_policies_tool(query: str, top_k: int = 2):
+def rag_over_policies_tool(query: str, top_k: int = 2):
     query_embedding = embed_text(query, input_type="search_query")
     db = SessionLocal()
     try:

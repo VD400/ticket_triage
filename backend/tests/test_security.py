@@ -12,3 +12,6 @@ def test_verify_password_correct():
 def test_verify_password_incorrect():
     hashed = hash_password("NeverChangeUnlessYouWantTo")
     assert verify_password("randomCrap", hashed) is False
+
+
+    
