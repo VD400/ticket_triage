@@ -12,6 +12,5 @@ def redis_settings()->RedisSettings:
 async def get_redis() -> ArqRedis:
     return await create_pool(redis_settings())
     
-    
 async def get_redis_pool(request: Request)->ArqRedis:
     return request.app.state.redis

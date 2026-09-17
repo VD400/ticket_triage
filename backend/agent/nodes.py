@@ -154,7 +154,8 @@ def rag_event_resolution_node(agent_state: AgentState):
     record_ticket_event(ticket_id=agent_state['ticket_id'],
                         event_type=TicketEventType.TOOL_CALLED,
                         payload={
-                            "tool_used" : "past_tickets_rag"
+                            "tool_used" : "past_tickets_rag",
+                            "node" : "Rag-past-event-node"
                         })
     query = agent_state["ticket_text"]
     similar_res = rag_over_tickets(query)
@@ -175,7 +176,8 @@ def rag_over_policies_node(agent_state: AgentState):
     record_ticket_event(ticket_id=agent_state['ticket_id'],
                         event_type=TicketEventType.TOOL_CALLED,
                         payload={
-                            "tool_used" : "policies_rag"
+                            "tool_used" : "policies_rag",
+                            "node" : "Rag-policy-node",
                         })
     query = agent_state['ticket_text']
     relevant_policies = rag_over_policies_tool(query)
@@ -196,7 +198,8 @@ def sql_node(agent_state: AgentState):
     record_ticket_event(ticket_id=agent_state['ticket_id'],
                         event_type=TicketEventType.TOOL_CALLED,
                         payload={
-                            "tool_used" : "sql"
+                            "tool_used" : "sql",
+                            "node": "SQL-node",
                         })
     query = agent_state['ticket_text']
     relevant_sql = generate_sql_tool(query)
@@ -237,7 +240,8 @@ def human_assistance_node(agent_state : AgentState):
                         payload={
                             "tool_used" : "human_clarification",
                             "question": question,
-                            "answer": answer
+                            "answer": answer,
+                            "node" : "Human-assistance-node",
                         })
     return {
         "clarification_answer" : answer,
@@ -412,6 +416,7 @@ def supervisor_node(agent_state: AgentState):
                 "next_action": "SYNTHESIS",
                 "reason": reason,
                 "tool_calls_made": agent_state["tool_calls_made"],
+                "node" : "Supervisor-node",
             },
         )
         return {

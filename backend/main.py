@@ -7,7 +7,7 @@ from agent.queue import redis_settings
 from auth.router import router as auth_router
 from customers.router import router as customers_router
 from tickets.router import router as tickets_router
-
+import tickets.websocket_routes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

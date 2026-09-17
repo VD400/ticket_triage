@@ -1,6 +1,6 @@
 from models.ticket_event import TicketEvent, TicketEventType
 from database import SessionLocal
-
+from agent.events import publish_ticket_event
 
 def record_ticket_event(
     ticket_id: int,
@@ -20,6 +20,16 @@ def record_ticket_event(
         db.commit()
         db.refresh(event)
 
+        publish_ticket_event(
+            ticket_id, 
+            {
+                'id': event.id,
+                'ticket_id': ticket_id,
+                "event_type": event.event_type.value,
+                "payload": payload,
+                "created_at": event.created_at.isoformat()
+            }
+        )
         return event
 
     except Exception:

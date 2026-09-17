@@ -12,7 +12,14 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 def request_verification(payload: EmailVerificationRequest, db: Session = Depends(get_db)):
     customer = db.query(Customer).filter(Customer.email == payload.email).first()
     if not customer:
-        raise HTTPException(status_code=404, detail="No customer with given email found.")
+        customer = Customer(
+            name=payload.email.split("@")[0][:50],
+            email=payload.email,
+            email_verified=False
+        )
+        db.add(Customer)
+        db.commit()
+        db.refesh(customer)
     token_str = generate_verification_token()
     token = VerificationToken(
         customer_id=customer.id,
@@ -39,5 +46,5 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     token_row.used = True
     db.commit()
 
-    return {"message" : "Email verified successfully"}
+    return {"message" : "Email verified successfully", "customer_id" : customer.id}
 
