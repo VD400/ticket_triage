@@ -1,10 +1,12 @@
 from fastapi import WebSocket, WebSocketDisconnect
 import redis.asyncio as redis
-from .router import router, get_ticket_events
+from .router import router
 import os
 from auth.jwtToken import decode_access_token
 from database import SessionLocal
-from models import User
+from models import User 
+from models.ticket_event import TicketEvent
+from schemas.ticket_event import TicketEventResponse
 
 @router.websocket("/{ticket_id}/stream")
 async def ticket_stream(websocket: WebSocket, ticket_id: int):
@@ -32,8 +34,17 @@ async def ticket_stream(websocket: WebSocket, ticket_id: int):
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(f"ticket:{ticket_id}")
     
-    past_events = get_ticket_events(ticket_id)
-    websocket.send_json(past_events)
+    past_events = db.query(TicketEvent).filter(TicketEvent.ticket_id==ticket_id).order_by(TicketEvent.created_at.asc()).all()
+    history = [
+        TicketEventResponse.model_validate(event).model_dump(
+            mode="json"
+        )
+        for event in past_events
+    ]
+    
+    await websocket.send_json({
+        "type": "history",
+        "events": history})
     
     try:
         async for message in pubsub.listen():
