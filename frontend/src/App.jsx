@@ -9,6 +9,7 @@ import NeedsAttention from "./pages/NeedsAttention";
 import CustomerComplaint from "./pages/CustomerComplaint";
 import DashboardLayout from "./components/dashboard/DashboardLayout";
 import Resolved from "./pages/Resolved";
+import LiveTrace from "./pages/LiveTrace";
 import "./index.css";
 
 function App() {
@@ -38,6 +39,7 @@ function App() {
         <Route path="awaiting-review" element={<AwaitingReview />} />
         <Route path="needs-attention" element={<NeedsAttention />} />
         <Route path="resolved" element={<Resolved />}/>
+        <Route path="liveTrace" element={<LiveTrace />}/>
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

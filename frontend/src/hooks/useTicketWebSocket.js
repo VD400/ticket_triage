@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {API_BASE, toWsUrl} from "../../components/dashboard/api";
+import {API_BASE, toWsUrl} from "../components/dashboard/api";
 
 const TOOL_TO_NODE = {
   past_tickets_rag: "Rag-past-event-node",

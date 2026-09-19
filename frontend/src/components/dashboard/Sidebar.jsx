@@ -21,7 +21,7 @@ const WORKSPACE_ITEMS = [
   { key: "awaitingReview", label: "Awaiting your review", to: "/dashboard/awaiting-review", icon: InboxIcon, badgeKey: "awaitingReview", tone: "amber" },
   { key: "needsAttention", label: "Needs attention", to: "/dashboard/needs-attention", icon: AlertTriangleIcon, badgeKey: "needsAttention", tone: "coral" },
   { key: "resolved", label: "Resolved", to: "/dashboard/resolved", icon: CheckCircleIcon },
-  { key: "liveTrace", label: "Live agent trace", to: "/dashboard/live", icon: ActivityIcon },
+  { key: "liveTrace", label: "Live agent trace", to: "/dashboard/liveTrace", icon: ActivityIcon },
 ];
 
 const ACCOUNT_ITEMS = [
