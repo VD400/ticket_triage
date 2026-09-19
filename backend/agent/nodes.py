@@ -231,7 +231,7 @@ def human_assistance_node(agent_state : AgentState):
         "type" : "human_clarification",
         "question" : question,
         "ticket_id" : agent_state["ticket_id"]
-    })
+    })   
     
     _update_ticket(agent_state['ticket_id'], status=TicketStatus.PROCESSING)
     

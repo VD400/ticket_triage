@@ -33,18 +33,21 @@ async def ticket_stream(websocket: WebSocket, ticket_id: int):
     
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(f"ticket:{ticket_id}")
-    
-    past_events = db.query(TicketEvent).filter(TicketEvent.ticket_id==ticket_id).order_by(TicketEvent.created_at.asc()).all()
-    history = [
-        TicketEventResponse.model_validate(event).model_dump(
-            mode="json"
-        )
-        for event in past_events
-    ]
-    
+    db = SessionLocal()
+    try:
+        past_events = db.query(TicketEvent).filter(TicketEvent.ticket_id==ticket_id).order_by(TicketEvent.created_at.asc()).all()
+        history = [
+            TicketEventResponse.model_validate(event).model_dump(
+                mode="json"
+            )
+            for event in past_events
+        ]
+    finally:
+        db.close()
+        
     await websocket.send_json({
         "type": "history",
-        "events": history})
+        "events": history}) 
     
     try:
         async for message in pubsub.listen():
