@@ -17,9 +17,9 @@ def request_verification(payload: EmailVerificationRequest, db: Session = Depend
             email=payload.email,
             email_verified=False
         )
-        db.add(Customer)
+        db.add(customer)
         db.commit()
-        db.refesh(customer)
+        db.refresh(customer)
     token_str = generate_verification_token()
     token = VerificationToken(
         customer_id=customer.id,
@@ -28,23 +28,52 @@ def request_verification(payload: EmailVerificationRequest, db: Session = Depend
     )
     db.add(token)
     db.commit()
-    print(f"[MOCK EMAIL] Verification link: http://localhost:8000/customers/verify-email?token={token_str}")
+    print(f"[MOCK EMAIL] Verification link: http://localhost:5173/customerComplaint?token={token_str}")
     return {"message": "Verification email sent"}
 
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
-    token_row = db.query(VerificationToken).filter(VerificationToken.token == token).first()
+    token_row = (
+        db.query(VerificationToken)
+        .filter(VerificationToken.token == token)
+        .first()
+    )
+
     if not token_row:
-        raise HTTPException(status_code=400, detail="Invalid verification token")
-    if token_row.used:
-        raise HTTPException(status_code=400, detail="This token has already been used")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid verification token"
+        )
+
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == token_row.customer_id)
+        .first()
+    )
+
+    if not customer:
+        raise HTTPException(
+            status_code=404,
+            detail="Customer not found"
+        )
+
+    if token_row.used and token_row.expires_at >= datetime.now(timezone.utc):
+        return {
+            "message": "Email already verified",
+            "customer_id": customer.id
+        }
+
     if token_row.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="This token has expired, please generate a new token")
-    
-    customer = db.query(Customer).filter(Customer.id == token_row.customer_id).first()
+        raise HTTPException(
+            status_code=400,
+            detail="This token has expired, please generate a new token"
+        )
+
     customer.email_verified = True
     token_row.used = True
     db.commit()
 
-    return {"message" : "Email verified successfully", "customer_id" : customer.id}
-
+    return {
+        "message": "Email verified successfully",
+        "customer_id": customer.id
+    }

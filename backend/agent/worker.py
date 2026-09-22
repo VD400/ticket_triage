@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from arq.connections import RedisSettings
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

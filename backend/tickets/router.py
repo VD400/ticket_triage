@@ -46,6 +46,14 @@ def list_tickets(db: Session = Depends(get_db), user = Depends(require_role(User
     else:
         return db.query(Ticket).filter(Ticket.assigned_agent_id==user.id).all()
 
+@router.get("/completed",response_model=List[TicketResponse])
+def list_completed_tickets(db: Session = Depends(get_db),user=Depends(require_role(UserRole.ADMIN,UserRole.AGENT,UserRole.VIEWER))):
+    return (
+        db.query(Ticket)
+        .filter(Ticket.status == TicketStatus.RESOLVED)
+        .order_by(Ticket.created_at.desc())
+        .all()
+    )
 
 @router.post("/ticket", response_model=TicketEventCreate)
 def create_ticket_event(payload: TicketEventCreate, db: Session = Depends(get_db), user = Depends(require_role(UserRole.ADMIN, UserRole.AGENT))):

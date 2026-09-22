@@ -46,8 +46,10 @@ def generate_sql_tool(question: str) -> str:
     2. Never generate any query that edits, deletes, or changes data in any way.
     3. If the question requires changing or deleting data, refuse and say so instead of generating SQL.
     4. Return only a valid PostgreSQL query starting with SELECT.
-    5. Enum-like columns (status, category, priority, transaction_type, refund_status) are stored in UPPERCASE — match this exact casing.
-    6. When filtering by name-like text fields, use ILIKE with wildcards instead of exact equality.
+    5. Do not include a semicolon at the end of the query.
+    6. Do not include SQL comments such as -- or /* */.
+    7. Enum-like columns (status, category, priority, transaction_type, refund_status) are stored in UPPERCASE — match this exact casing.
+    8. When filtering by name-like text fields, use ILIKE with wildcards instead of exact equality.
 
     POSTGRESQL query:
     """
@@ -57,7 +59,6 @@ def generate_sql_tool(question: str) -> str:
     if not sql.upper().startswith("SELECT"):
         raise ValueError(f"Refusing non-SELECT SQL from generate_sql_tool: {sql!r}")
     if ";" in sql.rstrip(";"):
-        # A second statement after the first — classic injection pattern.
         raise ValueError(f"Refusing multi-statement SQL: {sql!r}")
     if _DISALLOWED_SQL.search(sql):
         raise ValueError(f"Refusing SQL containing a disallowed keyword: {sql!r}")
