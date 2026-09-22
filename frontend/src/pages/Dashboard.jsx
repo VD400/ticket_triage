@@ -1,7 +1,13 @@
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import StatCard from "../components/dashboard/StatCard";
 import AttentionQueue from "../components/dashboard/AttentionQueue";
-import { ClockIcon, InboxIcon, AlertTriangleIcon, CheckCircleIcon } from "../components/dashboard/icons";
+import {
+  ClockIcon,
+  InboxIcon,
+  AlertTriangleIcon,
+  CheckCircleIcon,
+} from "../components/dashboard/icons";
 import { MOCK_TICKETS } from "../components/dashboard/mockTickets";
 import { bucketTickets } from "../components/dashboard/ticketBuckets";
 
@@ -15,6 +21,8 @@ function getGreeting() {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+
   const buckets = useMemo(() => bucketTickets(MOCK_TICKETS), []);
   const firstName = MOCK_USER.name.split(" ")[0];
 
@@ -24,6 +32,7 @@ export default function Dashboard() {
         <h2 className="text-2xl font-semibold tracking-tight text-[#E7E9EE] sm:text-3xl">
           {getGreeting()}, {firstName}
         </h2>
+
         <p className="mt-1 text-sm text-[#8A93A6]">
           Here's where things stand across your queue today.
         </p>
@@ -37,6 +46,7 @@ export default function Dashboard() {
           helperText="Drafted by the agent, ready to check"
           accent="amber"
         />
+
         <StatCard
           icon={AlertTriangleIcon}
           label="Needs attention"
@@ -44,6 +54,7 @@ export default function Dashboard() {
           helperText="Flagged for a human to step in"
           accent="coral"
         />
+
         <StatCard
           icon={ClockIcon}
           label="Not yet processed"
@@ -51,6 +62,7 @@ export default function Dashboard() {
           helperText="Still in the queue or being classified"
           accent="slate"
         />
+
         <StatCard
           icon={CheckCircleIcon}
           label="Resolved"
@@ -61,11 +73,19 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-8">
-        <h3 className="mb-3 text-base font-semibold text-[#E7E9EE]">Your queue</h3>
+        <h3 className="mb-3 text-base font-semibold text-[#E7E9EE]">
+          Your queue
+        </h3>
+
         <AttentionQueue
           ticketsByBucket={buckets}
           onOpenTicket={(ticket) => {
-            console.log("open ticket", ticket.id);
+            localStorage.setItem(
+              "lastCreatedTicketId",
+              String(ticket.id)
+            );
+
+            navigate(`/dashboard/liveTrace/${ticket.id}`);
           }}
         />
       </div>

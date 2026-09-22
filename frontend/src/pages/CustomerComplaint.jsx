@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-// Point this at your backend, e.g. import.meta.env.VITE_API_URL
 const API_BASE = import.meta.env.VITE_API_URL;
 
 const STEPS = [
