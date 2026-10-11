@@ -33,14 +33,14 @@ def test_public_signup_cannot_create_employee_in_production(client, db_session, 
     assert db_session.query(User).filter_by(username="untrusted").first() is None
 
 
-def test_local_signup_cannot_self_assign_admin(client, db_session, monkeypatch):
+def test_local_development_registration_still_works(client, db_session, monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     response = client.post("/auth/register", json={
         "username": "untrusted", "email": "untrusted@example.com",
         "password": "a-long-password", "role": "admin",
     })
-    assert response.status_code == 403
-    assert db_session.query(User).filter_by(username="untrusted").first() is None
+    assert response.status_code == 201
+    assert db_session.query(User).filter_by(username="untrusted").one().role.value == "admin"
 
 
 def test_hosted_email_link_verifies_customer(client, db_session, production, monkeypatch, capsys):

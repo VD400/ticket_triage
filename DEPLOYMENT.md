@@ -21,8 +21,8 @@ No terminal download or patch application is required.
 
 These files add configurable CORS, real verification email, private employee
 provisioning, Docker startup, database initialization, and Vercel route rewrites.
-Production `/auth/register` is disabled. Local public registration can create
-viewers only; create administrator/agent accounts with the private CLI below.
+Production `/auth/register` is disabled. Development registration remains
+available; create hosted employee accounts with the private CLI below.
 
 ## 2. Create the Vercel project and get its public address
 
