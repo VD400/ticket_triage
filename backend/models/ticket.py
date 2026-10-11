@@ -23,9 +23,10 @@ class TicketStatus(str, enum.Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     AWAITING_APPROVAL = "awaiting_approval"
+    NEEDS_MANUAL_REVIEW = "needs_manual_review"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
     RESOLVED = "resolved"
     FAILED = "failed"
-    REJECTED = "rejected"
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -45,4 +46,12 @@ class Ticket(Base):
     events = relationship("TicketEvent", back_populates="ticket")
     resolution = relationship("TicketResolution", back_populates="ticket", uselist=False)
     drafts = relationship("AgentDraft", back_populates="ticket")
+
+    @property
+    def customer_name(self) -> str | None:
+        return self.customer.name if self.customer else None
+
+    @property
+    def customer_email(self) -> str | None:
+        return self.customer.email if self.customer else None
 

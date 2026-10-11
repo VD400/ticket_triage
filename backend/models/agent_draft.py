@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, Text, ForeignKey, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship 
+from sqlalchemy.dialects.postgresql import JSONB
 from .base import Base
 from datetime import datetime, timezone
 import enum
@@ -17,6 +18,7 @@ class AgentDraft(Base):
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     draft_text = Column(Text, nullable=False)
     status = Column(SQLEnum(DraftStatus), default=DraftStatus.PENDING_REVIEW, nullable=False)
+    analysis = Column(JSONB, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     

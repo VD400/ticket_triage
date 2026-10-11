@@ -5,6 +5,7 @@ from database import get_db
 from models import User
 from .security import hash_password, verify_password  
 from .jwtToken import create_access_token
+from auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -41,3 +42,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             return {"access_token": token, "token_type": "bearer"}
         else:
             raise HTTPException(status_code=400, detail="Invalid username or password")
+
+@router.get("/me", response_model=UserResponse)
+def get_me(user: User = Depends(get_current_user)):
+    return user

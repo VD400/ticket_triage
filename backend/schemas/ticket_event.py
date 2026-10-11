@@ -11,3 +11,11 @@ class TicketEventResponse(BaseModel):
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
+
+    
+class TicketEventCreate(BaseModel):
+    ticket_id: int
+    event_type: TicketEventType
+    payload: Optional[dict[str, Any]]
+    created_at: datetime
+    

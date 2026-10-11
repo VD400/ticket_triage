@@ -7,6 +7,7 @@ from .ticket import Ticket
 from .transaction import Transaction
 from .user import User
 from .verification_token import VerificationToken
+from .company_policy import CompanyPolicy
 
 # Why use __init__.py file , what does it do and why make imports into it?
 

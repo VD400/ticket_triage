@@ -6,18 +6,26 @@ from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 
 class TicketEventType(str, enum.Enum):
+    # ticket lifestyle
     QUEUED = "queued"
     PROCESSING_STARTED = "processing_started"
     AWAITING_APPROVAL = "awaiting_approval"
     RESOLVED = "resolved"
-    REJECTED = "rejected"
     FAILED = "failed"
     
+    # agent reasoning trace
+    CLARIFICATION_REQUESTED = "clarification_requested"
+    CLARIFICATION_ANSWERED = "clarification_answered"
     CLASSIFIED = "classified"
     TOOL_CALLED = "tool_called"
     TOOL_RESULT = "tool_result"
+    SUPERVISOR_DECISION = "supervisor_decision"
+    
+    # draft-specific events
     DRAFT_CREATED = "draft_created"
+    DRAFT_REJECTED = "draft_rejected"
     DRAFT_EDITED = "draft_edited"
+    DRAFT_APPROVED = "draft_approved"
     
     
 class TicketEvent(Base):
