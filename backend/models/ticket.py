@@ -47,3 +47,11 @@ class Ticket(Base):
     resolution = relationship("TicketResolution", back_populates="ticket", uselist=False)
     drafts = relationship("AgentDraft", back_populates="ticket")
 
+    @property
+    def customer_name(self) -> str | None:
+        return self.customer.name if self.customer else None
+
+    @property
+    def customer_email(self) -> str | None:
+        return self.customer.email if self.customer else None
+
