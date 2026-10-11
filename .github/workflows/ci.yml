@@ -111,7 +111,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the locked Render image
-        run: docker build -t ticket-triage-check backend
+        run: |
+          build_status=0
+          docker build -t ticket-triage-check backend > /tmp/deployment-build.log 2>&1 || build_status=$?
+          cat /tmp/deployment-build.log
+          if [ "$build_status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          tail = "\n".join(Path("/tmp/deployment-build.log").read_text().splitlines()[-60:])
+          escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Render image build failed::{escaped}")
+          PY
+            exit "$build_status"
+          fi
       - name: Check API and worker imports without provider calls
         run: |
           docker run --rm \
