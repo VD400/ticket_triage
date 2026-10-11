@@ -8,7 +8,7 @@ const Login = ({onLoginSuccess=()=>{}}) => {
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
-    const handleLogin = async (e, demoUsername, demoPassword) => {
+    const handleLogin = async (e) => {
         e.preventDefault();
         try{
             const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/login`, {
@@ -17,8 +17,8 @@ const Login = ({onLoginSuccess=()=>{}}) => {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    username: demoUsername || username,
-                    password: demoPassword || password,
+                    username,
+                    password,
                 })
             });
             if(!response.ok){
@@ -57,7 +57,7 @@ const Login = ({onLoginSuccess=()=>{}}) => {
                             type='text'
                             value={username}
                             onChange={(e)=>setUsername(e.target.value)}
-                            placeholder='demoName'
+                            placeholder="Username"
                             required
                         />
                     </div>

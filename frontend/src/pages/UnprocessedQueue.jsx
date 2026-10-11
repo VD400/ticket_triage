@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { ChevronRightIcon, ClockIcon } from "../components/dashboard/icons";
-import { MOCK_TICKETS } from "../components/dashboard/mockTickets";
-import { bucketTickets } from "../components/dashboard/ticketBuckets";
-import { toTitleCase, timeAgo, STATUS_STYLES } from "../components/dashboard/ticketBuckets";
+import { fetchTickets } from "../components/dashboard/api";
+import { bucketTickets, toTitleCase, timeAgo, STATUS_STYLES } from "../components/dashboard/ticketBuckets";
 
 const REFRESH_INTERVAL_MS = 8000;
 
 function QueueRow({ ticket, isExpanded, onToggle }) {
-  const statusStyle = STATUS_STYLES[ticket.status];
+  const statusStyle = STATUS_STYLES[ticket.status] ?? STATUS_STYLES.queued;
   const isClassified = Boolean(ticket.category);
 
   return (
@@ -24,7 +23,9 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
           <p className="truncate text-sm font-medium text-[#E7E9EE]">{ticket.subject}</p>
           <p className="mt-0.5 truncate text-xs text-[#5B6472]">
             {ticket.customerName}
-            {isClassified ? ` · ${toTitleCase(ticket.category)} · ${toTitleCase(ticket.priority)}` : " · Not yet classified"}
+            {isClassified
+              ? ` · ${toTitleCase(ticket.category)} · ${toTitleCase(ticket.priority)}`
+              : " · Not yet classified"}
           </p>
         </div>
         <span className="hidden shrink-0 text-xs text-[#5B6472] sm:inline">{timeAgo(ticket.createdAt)}</span>
@@ -47,16 +48,34 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
 }
 
 export default function UnprocessedQueue() {
-  const [tickets, setTickets] = useState(() => bucketTickets(MOCK_TICKETS).unprocessed);
+  const [tickets, setTickets] = useState([]);
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const [lastRefreshed, setLastRefreshed] = useState(() => new Date());
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTickets(bucketTickets(MOCK_TICKETS).unprocessed);
-      setLastRefreshed(new Date());
-    }, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const allTickets = await fetchTickets();
+        if (cancelled) return;
+        setTickets(bucketTickets(allTickets).unprocessed);
+        setLastRefreshed(new Date());
+        setError("");
+      } catch (err) {
+        if (cancelled) return;
+        setError(err.message || "Failed to load the queue.");
+      }
+    }
+
+    load();
+    const interval = setInterval(load, REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   function toggleExpanded(id) {
@@ -83,6 +102,12 @@ export default function UnprocessedQueue() {
           Updated {timeAgo(lastRefreshed.toISOString())}
         </p>
       </div>
+
+      {error && (
+        <div className="mb-5 rounded-xl border border-[#F2665A]/20 bg-[#F2665A]/5 px-4 py-3 text-sm text-[#F2665A]">
+          {error}
+        </div>
+      )}
 
       {tickets.length === 0 ? (
         <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">

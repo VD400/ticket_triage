@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StatCard from "../components/dashboard/StatCard";
 import AttentionQueue from "../components/dashboard/AttentionQueue";
@@ -8,10 +8,8 @@ import {
   AlertTriangleIcon,
   CheckCircleIcon,
 } from "../components/dashboard/icons";
-import { MOCK_TICKETS } from "../components/dashboard/mockTickets";
+import { fetchCurrentUser, fetchTickets } from "../components/dashboard/api";
 import { bucketTickets } from "../components/dashboard/ticketBuckets";
-
-const MOCK_USER = { name: "Devika Menon" };
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -20,11 +18,50 @@ function getGreeting() {
   return "Good evening";
 }
 
+const EMPTY_BUCKETS = {
+  unprocessed: [],
+  awaitingReview: [],
+  needsAttention: [],
+  resolved: [],
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [tickets, setTickets] = useState([]);
+  const [user, setUser] = useState(null);
+  const [error, setError] = useState("");
 
-  const buckets = useMemo(() => bucketTickets(MOCK_TICKETS), []);
-  const firstName = MOCK_USER.name.split(" ")[0];
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        setError("");
+        const [currentTickets, currentUser] = await Promise.all([
+          fetchTickets(),
+          fetchCurrentUser(),
+        ]);
+
+        if (cancelled) return;
+        setTickets(currentTickets);
+        setUser(currentUser);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err.message || "Failed to load dashboard data.");
+      }
+    }
+
+    load();
+    const interval = setInterval(load, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const buckets = tickets.length ? bucketTickets(tickets) : EMPTY_BUCKETS;
+  const firstName = user?.username?.split(" ")[0] || "there";
 
   return (
     <>
@@ -37,6 +74,12 @@ export default function Dashboard() {
           Here's where things stand across your queue today.
         </p>
       </div>
+
+      {error && (
+        <div className="mb-5 rounded-xl border border-[#F2665A]/20 bg-[#F2665A]/5 px-4 py-3 text-sm text-[#F2665A]">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -80,12 +123,7 @@ export default function Dashboard() {
         <AttentionQueue
           ticketsByBucket={buckets}
           onOpenTicket={(ticket) => {
-            localStorage.setItem(
-              "lastCreatedTicketId",
-              String(ticket.id)
-            );
-
-            navigate(`/dashboard/liveTrace/${ticket.id}`);
+            navigate(`/dashboard/liveTrace?ticketId=${ticket.id}`);
           }}
         />
       </div>

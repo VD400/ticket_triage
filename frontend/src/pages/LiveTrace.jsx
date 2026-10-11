@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import useTicketWebSocket from "../hooks/useTicketWebSocket";
 import {
-  API_BASE,
-  authHeaders,
+  fetchTickets,
 } from "../components/dashboard/api";
 
 const NODE_LABELS = {
@@ -331,47 +330,26 @@ export default function LiveTrace() {
   const [search, setSearch] = useState("");
 
   /*
-   * Load every resolved ticket.
+   * Load every ticket visible to the current user. New tickets can be
+   * queued, processing, awaiting review, or resolved, so Live Trace must
+   * not limit the list to /tickets/completed.
    */
-  async function loadCompletedTickets() {
+  async function loadTraceTickets() {
     try {
       setTicketError("");
 
-      const res = await fetch(
-        `${API_BASE}/tickets/completed`,
-        {
-          headers: authHeaders(),
-        }
-      );
+      const data = await fetchTickets();
+      const traceTickets = Array.isArray(data) ? data : [];
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(
-          data?.detail ||
-            "Failed to load completed tickets"
-        );
-      }
-
-      const completed = Array.isArray(data)
-        ? data
-        : [];
-
-      completed.sort(
+      traceTickets.sort(
         (a, b) =>
-          new Date(b.created_at).getTime() -
-          new Date(a.created_at).getTime()
+          new Date(b.created_at ?? b.createdAt).getTime() -
+          new Date(a.created_at ?? a.createdAt).getTime()
       );
 
-      setTickets(completed);
+      setTickets(traceTickets);
 
-      /*
-       * If the URL already contains a ticket ID and that ticket
-       * exists, keep it selected.
-       *
-       * Otherwise automatically select the newest completed ticket.
-       */
-      const urlMatch = completed.find(
+      const urlMatch = traceTickets.find(
         (ticket) =>
           String(ticket.id) === String(urlTicketId)
       );
@@ -381,31 +359,20 @@ export default function LiveTrace() {
         return;
       }
 
-      if (completed.length > 0) {
-        const newest = completed[0];
-
+      if (traceTickets.length > 0) {
+        const newest = traceTickets[0];
         setSelectedTicketId(String(newest.id));
-
         setSearchParams(
-          {
-            ticketId: String(newest.id),
-          },
-          {
-            replace: true,
-          }
+          { ticketId: String(newest.id) },
+          { replace: true }
         );
       } else {
         setSelectedTicketId(null);
       }
     } catch (error) {
-      console.error(
-        "Failed to load completed tickets:",
-        error
-      );
-
+      console.error("Failed to load trace tickets:", error);
       setTicketError(
-        error.message ||
-          "Failed to load completed tickets."
+        error.message || "Failed to load trace tickets."
       );
     } finally {
       setLoadingTickets(false);
@@ -413,16 +380,13 @@ export default function LiveTrace() {
   }
 
   useEffect(() => {
-    loadCompletedTickets();
+    loadTraceTickets();
 
-    /*
-     * Automatically refresh the completed-ticket list.
-     * This means a newly resolved ticket will appear
-     * without requiring a full page refresh.
-     */
+    // Keep the list fresh so a newly submitted/processing ticket appears
+    // without requiring a page refresh.
     const interval = setInterval(
-      loadCompletedTickets,
-      10000
+      loadTraceTickets,
+      3000
     );
 
     return () => clearInterval(interval);
@@ -481,9 +445,8 @@ export default function LiveTrace() {
   /*
    * This is the actual live/history connection.
    *
-   * For a completed ticket, the websocket first returns
-   * the complete DB history, then remains available for
-   * any further events.
+   * For any ticket, the websocket first returns the complete DB history,
+   * then remains available for any new events.
    */
   const {
     events,
@@ -496,38 +459,24 @@ export default function LiveTrace() {
     completedNodes.length;
 
   const knownNodes = useMemo(() => {
-    const nodes = [...NODE_ORDER];
+    const observed = new Set();
+    const observedOrder = [];
 
-    events.forEach((event) => {
-      const node = getEventNode(event);
+    const addNode = (node) => {
+      if (!node || observed.has(node)) return;
+      observed.add(node);
+      observedOrder.push(node);
+    };
 
-      if (node && !nodes.includes(node)) {
-        nodes.push(node);
-      }
-    });
+    events.forEach((event) => addNode(getEventNode(event)));
+    completedNodes.forEach(addNode);
+    addNode(activeNode);
 
-    if (
-      activeNode &&
-      !nodes.includes(activeNode)
-    ) {
-      nodes.push(activeNode);
-    }
+    const preferredOrder = NODE_ORDER.filter((node) => observed.has(node));
+    const extraNodes = observedOrder.filter((node) => !NODE_ORDER.includes(node));
 
-    completedNodes.forEach((node) => {
-      if (
-        node &&
-        !nodes.includes(node)
-      ) {
-        nodes.push(node);
-      }
-    });
-
-    return nodes;
-  }, [
-    events,
-    activeNode,
-    completedNodes,
-  ]);
+    return [...preferredOrder, ...extraNodes];
+  }, [events, activeNode, completedNodes]);
 
   return (
     <div className="space-y-6">
@@ -544,7 +493,7 @@ export default function LiveTrace() {
             </span>
 
             <span className="text-xs font-medium text-[#8A93A6]">
-              Completed tickets
+              All tickets
             </span>
           </div>
 
@@ -553,15 +502,15 @@ export default function LiveTrace() {
           </h2>
 
           <p className="mt-1 text-sm text-[#8A93A6]">
-            Select a completed ticket to inspect its
-            complete agent execution history.
+            Select a ticket to inspect its complete
+            agent execution history.
           </p>
         </div>
 
         <button
           onClick={() => {
             setLoadingTickets(true);
-            loadCompletedTickets();
+            loadTraceTickets();
           }}
           disabled={loadingTickets}
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-2 text-sm font-medium text-[#C7CBD4] transition hover:border-[#3A4250] hover:bg-[#1B2029] disabled:cursor-not-allowed disabled:opacity-50"
@@ -604,7 +553,7 @@ export default function LiveTrace() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-semibold text-[#E7E9EE]">
-                  Completed tickets
+                  All tickets
                 </p>
 
                 <p className="mt-1 text-xs text-[#5B6472]">
@@ -615,8 +564,8 @@ export default function LiveTrace() {
                 </p>
               </div>
 
-              <span className="rounded-full bg-[#34D399]/10 px-2.5 py-1 text-xs font-medium text-[#34D399]">
-                Resolved
+              <span className="rounded-full bg-[#818CF8]/10 px-2.5 py-1 text-xs font-medium text-[#A5AEFF]">
+                Live
               </span>
             </div>
 
@@ -678,12 +627,11 @@ export default function LiveTrace() {
                 </div>
 
                 <p className="mt-4 text-sm font-medium text-[#E7E9EE]">
-                  No completed tickets
+                  No tickets found
                 </p>
 
                 <p className="mt-1 text-xs leading-relaxed text-[#5B6472]">
-                  Resolved tickets will appear here
-                  automatically.
+                  Newly submitted and processed tickets will appear here automatically.
                 </p>
               </div>
             ) : (
@@ -734,8 +682,8 @@ export default function LiveTrace() {
                       </p>
 
                       <div className="mt-3 flex items-center gap-2">
-                        <span className="rounded-md bg-[#34D399]/10 px-2 py-1 text-[10px] font-medium text-[#34D399]">
-                          Resolved
+                        <span className="rounded-md bg-[#818CF8]/10 px-2 py-1 text-[10px] font-medium text-[#A5AEFF]">
+                          {String(ticket.status ?? "unknown").replace(/_/g, " ")}
                         </span>
 
                         {ticket.category && (
@@ -775,13 +723,12 @@ export default function LiveTrace() {
                 </div>
 
                 <h3 className="mt-5 text-base font-semibold text-[#E7E9EE]">
-                  Select a completed ticket
+                  Select a ticket
                 </h3>
 
                 <p className="mt-2 text-sm leading-relaxed text-[#5B6472]">
-                  Choose a ticket from the list to
-                  inspect its complete execution
-                  history.
+                  Choose a ticket from the list to inspect
+                  its complete execution history.
                 </p>
               </div>
             </div>
@@ -800,8 +747,8 @@ export default function LiveTrace() {
                         /
                       </span>
 
-                      <span className="text-xs text-[#34D399]">
-                        Resolved
+                      <span className="text-xs text-[#A5AEFF]">
+                        {String(selectedTicket.status ?? "unknown").replace(/_/g, " ")}
                       </span>
                     </div>
 

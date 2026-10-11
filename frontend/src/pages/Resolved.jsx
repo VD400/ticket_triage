@@ -1,7 +1,7 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircleIcon, ChevronRightIcon } from "../components/dashboard/icons";
-import { MOCK_TICKETS, MOCK_RESOLUTIONS } from "../components/dashboard/mockTickets";
-import { bucketTickets, toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
-import { useState } from "react";
+import { fetchResolutions, fetchTickets } from "../components/dashboard/api";
+import { toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
 
 function TicketListItem({ ticket, resolution, isSelected, onSelect }) {
   return (
@@ -27,11 +27,61 @@ function TicketListItem({ ticket, resolution, isSelected, onSelect }) {
 }
 
 export default function Resolved() {
-  const tickets = bucketTickets(MOCK_TICKETS).resolved;
+  const [tickets, setTickets] = useState([]);
+  const [resolutions, setResolutions] = useState({});
   const [selectedId, setSelectedId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const selectedTicket = tickets.find((t) => t.id === selectedId) ?? null;
-  const selectedResolution = selectedTicket ? MOCK_RESOLUTIONS[selectedTicket.id] : null;
+  const load = useCallback(async () => {
+    try {
+      setError("");
+      const [completedTickets, resolutionRows] = await Promise.all([
+        fetchTickets({ completed: true }),
+        fetchResolutions(),
+      ]);
+
+      const resolutionMap = Object.fromEntries(
+        resolutionRows.map((resolution) => [resolution.ticketId, resolution])
+      );
+
+      setTickets(completedTickets);
+      setResolutions(resolutionMap);
+
+      setSelectedId((current) => {
+        if (current && completedTickets.some((ticket) => ticket.id === current)) return current;
+        return completedTickets[0]?.id ?? null;
+      });
+    } catch (err) {
+      setError(err.message || "Failed to load resolved tickets.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function initialLoad() {
+      if (cancelled) return;
+      await load();
+    }
+
+    initialLoad();
+    const interval = setInterval(load, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [load]);
+
+  const selectedTicket = useMemo(
+    () => tickets.find((ticket) => ticket.id === selectedId) ?? null,
+    [tickets, selectedId]
+  );
+
+  const selectedResolution = selectedTicket ? resolutions[selectedTicket.id] : null;
 
   return (
     <>
@@ -44,9 +94,19 @@ export default function Resolved() {
         </p>
       </div>
 
+      {error && (
+        <p className="mb-5 rounded-md border border-[#F2665A]/30 bg-[#F2665A]/10 px-3.5 py-2.5 text-sm text-[#F2665A]">
+          {error}
+        </p>
+      )}
+
       <div className="flex gap-5">
         <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
-          {tickets.length === 0 ? (
+          {loading ? (
+            <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
+              <p className="text-sm text-[#5B6472]">Loading resolved tickets…</p>
+            </div>
+          ) : tickets.length === 0 ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <CheckCircleIcon className="mx-auto h-6 w-6 text-[#5B6472]" />
               <p className="mt-3 text-sm text-[#8A93A6]">Nothing resolved yet.</p>
@@ -57,7 +117,7 @@ export default function Resolved() {
                 <TicketListItem
                   key={ticket.id}
                   ticket={ticket}
-                  resolution={MOCK_RESOLUTIONS[ticket.id]}
+                  resolution={resolutions[ticket.id]}
                   isSelected={ticket.id === selectedId}
                   onSelect={() => setSelectedId(ticket.id)}
                 />

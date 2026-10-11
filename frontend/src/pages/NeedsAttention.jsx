@@ -1,34 +1,41 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChevronRightIcon, AlertTriangleIcon } from "../components/dashboard/icons";
-import { MOCK_TICKETS } from "../components/dashboard/mockTickets";
+import {
+  fetchTicketDrafts,
+  fetchTicketEvents,
+  fetchTickets,
+  submitClarification,
+  submitManualResolution,
+} from "../components/dashboard/api";
 import { bucketTickets, toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
-import { API_BASE, authHeaders, extractErrorMessage } from "../components/dashboard/api";
 
 const TABS = [
   { key: "awaiting_clarification", label: "Needs clarification" },
   { key: "needs_manual_review", label: "Needs manual review" },
 ];
 
-async function submitClarification(ticketId, answer) {
-  const res = await fetch(`${API_BASE}/tickets/${ticketId}/clarify`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ answer }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(extractErrorMessage(data, "Something went wrong submitting your answer."));
-  return data;
+function getClarificationQuestion(events) {
+  const clarificationEvent = [...events]
+    .reverse()
+    .find((event) => event.event_type === "clarification_requested");
+
+  const payload = clarificationEvent?.payload ?? {};
+  return (
+    payload.question ??
+    payload.clarification_question ??
+    payload.message ??
+    payload.description ??
+    payload.reason ??
+    "The agent requested additional information before it can continue."
+  );
 }
 
-async function submitManualResolution(ticketId, resolutionText) {
-  const res = await fetch(`${API_BASE}/tickets/${ticketId}/resolve-manually`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ resolution_text: resolutionText }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(extractErrorMessage(data, "Something went wrong resolving this ticket."));
-  return data;
+function getRejectedDraft(drafts) {
+  return (
+    drafts.find((draft) => draft.status === "rejected") ??
+    drafts.find((draft) => draft.status === "edited") ??
+    null
+  );
 }
 
 function TicketListItem({ ticket, isSelected, onSelect }) {
@@ -52,25 +59,74 @@ function TicketListItem({ ticket, isSelected, onSelect }) {
 }
 
 export default function NeedsAttention() {
-  const allNeedsAttention = bucketTickets(MOCK_TICKETS).needsAttention;
-  const [tickets, setTickets] = useState(allNeedsAttention);
+  const [tickets, setTickets] = useState([]);
   const [activeTab, setActiveTab] = useState(TABS[0].key);
   const [selectedId, setSelectedId] = useState(null);
   const [answerText, setAnswerText] = useState("");
   const [resolutionText, setResolutionText] = useState("");
+  const [clarificationQuestion, setClarificationQuestion] = useState("");
+  const [rejectedDraftText, setRejectedDraftText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [actionError, setActionError] = useState("");
   const [submittedIds, setSubmittedIds] = useState(() => new Set());
 
-  const visibleTickets = tickets.filter((t) => t.status === activeTab);
-  const selectedTicket = visibleTickets.find((t) => t.id === selectedId) ?? null;
+  const loadTickets = useCallback(async () => {
+    const allTickets = await fetchTickets();
+    setTickets(bucketTickets(allTickets).needsAttention);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        if (!cancelled) setLoading(true);
+        await loadTickets();
+        if (!cancelled) setActionError("");
+      } catch (err) {
+        if (!cancelled) setActionError(err.message || "Failed to load tickets needing attention.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    const interval = setInterval(load, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [loadTickets]);
+
+  const visibleTickets = tickets.filter((ticket) => ticket.status === activeTab);
+  const selectedTicket = visibleTickets.find((ticket) => ticket.id === selectedId) ?? null;
   const isSubmitted = selectedTicket ? submittedIds.has(selectedTicket.id) : false;
 
-  function selectTicket(ticket) {
+  async function selectTicket(ticket) {
     setSelectedId(ticket.id);
     setAnswerText("");
     setResolutionText("");
+    setClarificationQuestion("");
+    setRejectedDraftText("");
     setActionError("");
+    setLoadingDetails(true);
+
+    try {
+      const [events, drafts] = await Promise.all([
+        fetchTicketEvents(ticket.id),
+        fetchTicketDrafts(ticket.id),
+      ]);
+
+      setClarificationQuestion(getClarificationQuestion(events));
+      setRejectedDraftText(getRejectedDraft(drafts)?.draftText ?? "");
+    } catch (err) {
+      setActionError(err.message || "Failed to load ticket details.");
+    } finally {
+      setLoadingDetails(false);
+    }
   }
 
   function closeDetail() {
@@ -91,8 +147,9 @@ export default function NeedsAttention() {
     try {
       await submitClarification(selectedTicket.id, answerText);
       setSubmittedIds((prev) => new Set(prev).add(selectedTicket.id));
+      await loadTickets();
     } catch (err) {
-      setActionError(err.message);
+      setActionError(err.message || "Something went wrong submitting your answer.");
     } finally {
       setIsSubmitting(false);
     }
@@ -104,10 +161,10 @@ export default function NeedsAttention() {
     setActionError("");
     try {
       await submitManualResolution(selectedTicket.id, resolutionText);
-      setTickets((prev) => prev.filter((t) => t.id !== selectedTicket.id));
+      await loadTickets();
       closeDetail();
     } catch (err) {
-      setActionError(err.message);
+      setActionError(err.message || "Something went wrong resolving this ticket.");
     } finally {
       setIsSubmitting(false);
     }
@@ -124,9 +181,15 @@ export default function NeedsAttention() {
         </p>
       </div>
 
+      {actionError && !selectedTicket && (
+        <p className="mb-5 rounded-md border border-[#F2665A]/30 bg-[#F2665A]/10 px-3.5 py-2.5 text-sm text-[#F2665A]">
+          {actionError}
+        </p>
+      )}
+
       <div className="mb-5 flex items-center gap-1 border-b border-[#262C38]">
         {TABS.map((tab) => {
-          const count = tickets.filter((t) => t.status === tab.key).length;
+          const count = tickets.filter((ticket) => ticket.status === tab.key).length;
           const isActive = tab.key === activeTab;
           return (
             <button
@@ -147,7 +210,11 @@ export default function NeedsAttention() {
 
       <div className="flex gap-5">
         <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
-          {visibleTickets.length === 0 ? (
+          {loading ? (
+            <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
+              <p className="text-sm text-[#5B6472]">Loading tickets…</p>
+            </div>
+          ) : visibleTickets.length === 0 ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <AlertTriangleIcon className="mx-auto h-6 w-6 text-[#5B6472]" />
               <p className="mt-3 text-sm text-[#8A93A6]">Nothing flagged here right now.</p>
@@ -170,6 +237,10 @@ export default function NeedsAttention() {
           {!selectedTicket ? (
             <div className="hidden h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
               <p className="text-sm text-[#5B6472]">Select a ticket to see what it needs.</p>
+            </div>
+          ) : loadingDetails ? (
+            <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-5 py-16 text-center">
+              <p className="text-sm text-[#5B6472]">Loading ticket details…</p>
             </div>
           ) : (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22]">
@@ -207,7 +278,7 @@ export default function NeedsAttention() {
                       <div>
                         <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">The agent is stuck on</p>
                         <p className="rounded-lg border border-[#F5B843]/30 bg-[#F5B843]/10 px-3.5 py-3 text-sm leading-relaxed text-[#F5B843]">
-                          {selectedTicket.clarificationQuestion}
+                          {clarificationQuestion || "No clarification question was recorded in the event history."}
                         </p>
                       </div>
                       <div>
@@ -239,11 +310,11 @@ export default function NeedsAttention() {
                   )
                 ) : (
                   <>
-                    {selectedTicket.rejectedDraftText && (
+                    {rejectedDraftText && (
                       <div>
                         <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">Draft that was rejected</p>
                         <p className="whitespace-pre-wrap rounded-lg border border-[#262C38] bg-[#0E1116] px-3.5 py-3 text-sm leading-relaxed text-[#5B6472]">
-                          {selectedTicket.rejectedDraftText}
+                          {rejectedDraftText}
                         </p>
                       </div>
                     )}

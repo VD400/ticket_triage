@@ -1,19 +1,11 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRightIcon, InboxIcon, CheckCircleIcon } from "../components/dashboard/icons";
-import { MOCK_TICKETS, MOCK_DRAFTS } from "../components/dashboard/mockTickets";
+import {
+  fetchTicketDrafts,
+  fetchTickets,
+  submitDraftReview,
+} from "../components/dashboard/api";
 import { bucketTickets, toTitleCase, timeAgo, PRIORITY_STYLES } from "../components/dashboard/ticketBuckets";
-import { API_BASE, authHeaders, extractErrorMessage } from "../components/dashboard/api";
-
-async function submitReview(ticketId, draftId, payload) {
-  const res = await fetch(`${API_BASE}/tickets/${ticketId}/drafts/${draftId}/review`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(extractErrorMessage(data, "Something went wrong reviewing this draft."));
-  return data;
-}
 
 function renderAnalysis(analysis) {
   if (!analysis) return "No analysis was recorded for this draft.";
@@ -38,7 +30,7 @@ function TicketListItem({ ticket, isSelected, onSelect }) {
         </p>
       </div>
       {ticket.priority && (
-        <span className={`shrink-0 rounded-md px-2 py-1 text-xs font-medium ${PRIORITY_STYLES[ticket.priority]}`}>
+        <span className={`shrink-0 rounded-md px-2 py-1 text-xs font-medium ${PRIORITY_STYLES[ticket.priority] ?? PRIORITY_STYLES.low}`}>
           {toTitleCase(ticket.priority)}
         </span>
       )}
@@ -47,22 +39,68 @@ function TicketListItem({ ticket, isSelected, onSelect }) {
 }
 
 export default function AwaitingReview() {
-  const [tickets, setTickets] = useState(() => bucketTickets(MOCK_TICKETS).awaitingReview);
-  const [drafts, setDrafts] = useState(() => MOCK_DRAFTS);
+  const [tickets, setTickets] = useState([]);
+  const [drafts, setDrafts] = useState({});
   const [selectedId, setSelectedId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedText, setEditedText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingDraft, setLoadingDraft] = useState(false);
   const [actionError, setActionError] = useState("");
 
-  const selectedTicket = tickets.find((t) => t.id === selectedId) ?? null;
-  const selectedDraft = selectedTicket ? drafts[selectedTicket.id] : null;
+  const loadTickets = useCallback(async () => {
+    const allTickets = await fetchTickets();
+    setTickets(bucketTickets(allTickets).awaitingReview);
+  }, []);
 
-  function selectTicket(ticket) {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        setLoading(true);
+        await loadTickets();
+      } catch (err) {
+        if (!cancelled) setActionError(err.message || "Failed to load tickets awaiting review.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    const interval = setInterval(load, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [loadTickets]);
+
+  const selectedTicket = useMemo(
+    () => tickets.find((ticket) => ticket.id === selectedId) ?? null,
+    [tickets, selectedId]
+  );
+
+  const selectedDraft = selectedTicket ? drafts[selectedTicket.id] ?? null : null;
+
+  async function selectTicket(ticket) {
     setSelectedId(ticket.id);
     setIsEditing(false);
     setActionError("");
-    setEditedText(drafts[ticket.id]?.draftText ?? "");
+    setLoadingDraft(true);
+
+    try {
+      const ticketDrafts = await fetchTicketDrafts(ticket.id);
+      const pending = ticketDrafts.find((draft) => draft.status === "pending_review") ?? ticketDrafts[0] ?? null;
+      setDrafts((prev) => ({ ...prev, [ticket.id]: pending }));
+      setEditedText(pending?.draftText ?? "");
+    } catch (err) {
+      setDrafts((prev) => ({ ...prev, [ticket.id]: null }));
+      setActionError(err.message || "Failed to load the draft for this ticket.");
+    } finally {
+      setLoadingDraft(false);
+    }
   }
 
   function closeDetail() {
@@ -71,51 +109,32 @@ export default function AwaitingReview() {
     setActionError("");
   }
 
-  function removeResolvedTicket(ticketId) {
-    setTickets((prev) => prev.filter((t) => t.id !== ticketId));
-    closeDetail();
+  async function finishReview(payload) {
+    if (!selectedTicket || !selectedDraft) return;
+    setIsSubmitting(true);
+    setActionError("");
+
+    try {
+      await submitDraftReview(selectedTicket.id, selectedDraft.id, payload);
+      await loadTickets();
+      closeDetail();
+    } catch (err) {
+      setActionError(err.message || "Something went wrong reviewing this draft.");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   async function handleApprove() {
-    if (!selectedTicket || !selectedDraft) return;
-    setIsSubmitting(true);
-    setActionError("");
-    try {
-      await submitReview(selectedTicket.id, selectedDraft.id, { action: "approve" });
-      removeResolvedTicket(selectedTicket.id);
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await finishReview({ action: "approve" });
   }
 
   async function handleSaveEdit() {
-    if (!selectedTicket || !selectedDraft) return;
-    setIsSubmitting(true);
-    setActionError("");
-    try {
-      await submitReview(selectedTicket.id, selectedDraft.id, { action: "edit", edited_text: editedText });
-      removeResolvedTicket(selectedTicket.id);
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await finishReview({ action: "edit", edited_text: editedText });
   }
 
   async function handleReject() {
-    if (!selectedTicket || !selectedDraft) return;
-    setIsSubmitting(true);
-    setActionError("");
-    try {
-      await submitReview(selectedTicket.id, selectedDraft.id, { action: "reject" });
-      removeResolvedTicket(selectedTicket.id);
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await finishReview({ action: "reject" });
   }
 
   return (
@@ -129,9 +148,19 @@ export default function AwaitingReview() {
         </p>
       </div>
 
+      {actionError && !selectedTicket && (
+        <p className="mb-5 rounded-md border border-[#F2665A]/30 bg-[#F2665A]/10 px-3.5 py-2.5 text-sm text-[#F2665A]">
+          {actionError}
+        </p>
+      )}
+
       <div className="flex gap-5">
         <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
-          {tickets.length === 0 ? (
+          {loading ? (
+            <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
+              <p className="text-sm text-[#5B6472]">Loading tickets…</p>
+            </div>
+          ) : tickets.length === 0 ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <InboxIcon className="mx-auto h-6 w-6 text-[#5B6472]" />
               <p className="mt-3 text-sm text-[#8A93A6]">Nothing waiting on your review right now.</p>
@@ -151,9 +180,19 @@ export default function AwaitingReview() {
         </div>
 
         <div className={`min-w-0 flex-1 ${selectedId ? "block" : "hidden md:block"}`}>
-          {!selectedTicket || !selectedDraft ? (
+          {!selectedTicket || loadingDraft ? (
             <div className="hidden h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
-              <p className="text-sm text-[#5B6472]">Select a ticket to review its draft.</p>
+              <p className="text-sm text-[#5B6472]">
+                {selectedTicket ? "Loading the latest agent draft…" : "Select a ticket to review its draft."}
+              </p>
+            </div>
+          ) : !selectedDraft ? (
+            <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-5 py-10 text-center">
+              <p className="text-sm text-[#8A93A6]">
+                {actionError
+                  ? `Could not load the draft: ${actionError}`
+                  : "No draft is currently available for this ticket."}
+              </p>
             </div>
           ) : (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22]">
