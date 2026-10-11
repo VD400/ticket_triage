@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { useDashboard } from "../components/dashboard/useDashboard";
+import { useMemo, useRef, useState } from "react";
 import { ChevronRightIcon, InboxIcon, CheckCircleIcon } from "../components/dashboard/icons";
 import {
   fetchTicketDrafts,
-  fetchTickets,
   submitDraftReview,
 } from "../components/dashboard/api";
-import { bucketTickets, toTitleCase, timeAgo, PRIORITY_STYLES } from "../components/dashboard/ticketBuckets";
+import { toTitleCase, timeAgo, PRIORITY_STYLES } from "../components/dashboard/ticketBuckets";
 
 function renderAnalysis(analysis) {
   if (!analysis) return "No analysis was recorded for this draft.";
@@ -39,43 +40,16 @@ function TicketListItem({ ticket, isSelected, onSelect }) {
 }
 
 export default function AwaitingReview() {
-  const [tickets, setTickets] = useState([]);
+  const { buckets, loading, refresh: loadTickets } = useDashboard();
+  const tickets = buckets.awaitingReview;
+  const detailRequest = useRef(0);
   const [drafts, setDrafts] = useState({});
   const [selectedId, setSelectedId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedText, setEditedText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [loadingDraft, setLoadingDraft] = useState(false);
   const [actionError, setActionError] = useState("");
-
-  const loadTickets = useCallback(async () => {
-    const allTickets = await fetchTickets();
-    setTickets(bucketTickets(allTickets).awaitingReview);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setLoading(true);
-        await loadTickets();
-      } catch (err) {
-        if (!cancelled) setActionError(err.message || "Failed to load tickets awaiting review.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    const interval = setInterval(load, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [loadTickets]);
 
   const selectedTicket = useMemo(
     () => tickets.find((ticket) => ticket.id === selectedId) ?? null,
@@ -85,6 +59,7 @@ export default function AwaitingReview() {
   const selectedDraft = selectedTicket ? drafts[selectedTicket.id] ?? null : null;
 
   async function selectTicket(ticket) {
+    const request = ++detailRequest.current;
     setSelectedId(ticket.id);
     setIsEditing(false);
     setActionError("");
@@ -92,18 +67,21 @@ export default function AwaitingReview() {
 
     try {
       const ticketDrafts = await fetchTicketDrafts(ticket.id);
+      if (request !== detailRequest.current) return;
       const pending = ticketDrafts.find((draft) => draft.status === "pending_review") ?? ticketDrafts[0] ?? null;
       setDrafts((prev) => ({ ...prev, [ticket.id]: pending }));
       setEditedText(pending?.draftText ?? "");
     } catch (err) {
+      if (request !== detailRequest.current) return;
       setDrafts((prev) => ({ ...prev, [ticket.id]: null }));
       setActionError(err.message || "Failed to load the draft for this ticket.");
     } finally {
-      setLoadingDraft(false);
+      if (request === detailRequest.current) setLoadingDraft(false);
     }
   }
 
   function closeDetail() {
+    detailRequest.current++;
     setSelectedId(null);
     setIsEditing(false);
     setActionError("");
@@ -155,7 +133,7 @@ export default function AwaitingReview() {
       )}
 
       <div className="flex gap-5">
-        <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
+        <div className={`w-full shrink-0 md:block md:w-80 ${selectedTicket ? "hidden" : "block"}`}>
           {loading ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <p className="text-sm text-[#5B6472]">Loading tickets…</p>
@@ -179,9 +157,9 @@ export default function AwaitingReview() {
           )}
         </div>
 
-        <div className={`min-w-0 flex-1 ${selectedId ? "block" : "hidden md:block"}`}>
+        <div className={`min-w-0 flex-1 ${selectedTicket ? "block" : "hidden md:block"}`}>
           {!selectedTicket || loadingDraft ? (
-            <div className="hidden h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
+            <div className="flex h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
               <p className="text-sm text-[#5B6472]">
                 {selectedTicket ? "Loading the latest agent draft…" : "Select a ticket to review its draft."}
               </p>
@@ -215,6 +193,7 @@ export default function AwaitingReview() {
               </div>
 
               <div className="space-y-5 px-5 py-5">
+                <Link to={`/dashboard/liveTrace?ticketId=${selectedTicket.id}`} className="inline-block text-sm text-[#818CF8] hover:underline">View full trace & history →</Link>
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">Original complaint</p>
                   <p className="text-sm leading-relaxed text-[#8A93A6]">{selectedTicket.description}</p>

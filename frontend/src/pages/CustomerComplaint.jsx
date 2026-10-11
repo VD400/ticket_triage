@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-const API_BASE = import.meta.env.VITE_API_URL;
+import { API_BASE } from "../components/dashboard/api";
+import { notifyTicketUpdate } from "../components/dashboard/useDashboard";
 
 const STEPS = [
   { key: "request", label: "Verify email" },
@@ -73,9 +74,6 @@ export default function CustomerComplaint() {
           setStep("verifyError");
           return;
         }
-        // TODO: this assumes the backend response includes `customer_id`
-        // (see chat note — /customers/verify-email currently only returns
-        // a message). Add that field server-side for this to work.
         setCustomerId(data.customer_id ?? null);
         setStep("complaint");
       } catch {
@@ -135,6 +133,7 @@ export default function CustomerComplaint() {
         setError(data.detail || "Something went wrong submitting your complaint.");
         return;
       }
+      notifyTicketUpdate();
       setTicketId(data.id);
       setStep("success");
     } catch {

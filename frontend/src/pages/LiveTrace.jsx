@@ -1,959 +1,442 @@
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import useTicketWebSocket from "../hooks/useTicketWebSocket";
+import { useDashboard } from "../components/dashboard/useDashboard";
 import {
-  fetchTickets,
+  fetchTicketDrafts,
+  fetchTicketResolution,
 } from "../components/dashboard/api";
+import {
+  STATUS_STYLES,
+  timeAgo,
+  toTitleCase,
+} from "../components/dashboard/ticketBuckets";
 
-const NODE_LABELS = {
-  "Classify-ticket-node": "Classify ticket",
-  "Rag-past-event-node": "Past tickets RAG",
-  "Rag-policy-node": "Policy RAG",
-  "SQL-node": "SQL lookup",
-  "Supervisor-node": "Supervisor",
-  "Human-assistance-node": "Human assistance",
-  "Synthesizer-node": "Response synthesizer",
+const LABELS = {
+  queued: "Complaint received",
+  processing_started: "Agent picked up the ticket",
+  classified: "Category and priority assigned",
+  tool_called: "Searching for context",
+  tool_result: "Context retrieved",
+  supervisor_decision: "Next step decided",
+  clarification_requested: "Waiting for clarification",
+  clarification_answered: "Clarification received — work resumed",
+  draft_created: "Response drafted",
+  awaiting_approval: "Ready for human review",
+  draft_approved: "Draft approved",
+  draft_edited: "Draft edited and approved",
+  draft_rejected: "Draft rejected — manual review needed",
+  resolved: "Ticket resolved",
+  failed: "Processing stopped — attention needed",
 };
-
-const NODE_DESCRIPTIONS = {
-  "Classify-ticket-node":
-    "Analyzing and classifying the incoming ticket",
-  "Rag-past-event-node":
-    "Searching historical ticket data",
-  "Rag-policy-node":
-    "Retrieving relevant company policies",
-  "SQL-node":
-    "Querying structured ticket information",
-  "Supervisor-node":
-    "Evaluating the next action",
-  "Human-assistance-node":
-    "Waiting for human clarification",
-  "Synthesizer-node":
-    "Generating the final response",
+const TOOLS = {
+  past_tickets_rag: "Similar past tickets",
+  policies_rag: "Company policies",
+  sql: "Account records",
 };
-
-const NODE_ORDER = [
-  "Classify-ticket-node",
-  "Rag-past-event-node",
-  "Rag-policy-node",
-  "SQL-node",
-  "Supervisor-node",
-  "Human-assistance-node",
-  "Synthesizer-node",
-];
-
-function formatNodeName(node) {
-  if (!node) return "Unknown node";
-
+const ACTIONS = {
+  POLICY_RAG: "Check company policies",
+  SQL: "Check account records",
+  HUMAN_CLARIFICATION: "Ask for clarification",
+  SYNTHESIS: "Write a response",
+};
+function summary(event) {
+  const p = event.payload || {};
+  if (event.event_type === "classified")
+    return [p.category, p.priority]
+      .filter(Boolean)
+      .map(toTitleCase)
+      .join(" · ");
+  if (["tool_called", "tool_result"].includes(event.event_type))
+    return TOOLS[p.tool_used] || toTitleCase(p.tool_used || "");
+  if (event.event_type === "supervisor_decision")
+    return ACTIONS[p.next_action] || toTitleCase(p.next_action || "");
+  if (event.event_type === "clarification_requested")
+    return p.question || p.clarification_question;
+  if (event.event_type === "clarification_answered") return p.answer;
+  return p.reason || p.message;
+}
+function EventItem({ event, newest }) {
   return (
-    NODE_LABELS[node] ??
-    node.replace(/-node$/, "").replace(/-/g, " ")
-  );
-}
-
-function formatEventName(eventType) {
-  if (!eventType) return "Unknown event";
-
-  return eventType
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function formatTime(timestamp) {
-  if (!timestamp) return "--:--:--";
-
-  const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return String(timestamp);
-  }
-
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function formatDate(timestamp) {
-  if (!timestamp) return "";
-
-  const date = new Date(timestamp);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  return date.toLocaleDateString([], {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatPayload(payload) {
-  if (!payload) return null;
-
-  if (typeof payload === "string") {
-    return payload;
-  }
-
-  try {
-    return JSON.stringify(payload, null, 2);
-  } catch {
-    return String(payload);
-  }
-}
-
-function getEventNode(event) {
-  if (!event) return null;
-
-  const payload = event.payload ?? {};
-
-  return (
-    payload.node ??
-    payload.node_name ??
-    payload.active_node ??
-    payload.tool_node ??
-    null
-  );
-}
-
-function getEventDescription(event) {
-  if (!event) return "";
-
-  const payload = event.payload ?? {};
-
-  return (
-    payload.message ??
-    payload.description ??
-    payload.reason ??
-    payload.content ??
-    ""
-  );
-}
-
-function getEventTimestamp(event) {
-  return (
-    event?.timestamp ??
-    event?.created_at ??
-    event?.time ??
-    event?.occurred_at ??
-    null
-  );
-}
-
-function StatusBadge({ status }) {
-  const config = {
-    connecting: {
-      label: "Connecting",
-      className: "bg-[#F5B843]/10 text-[#F5B843]",
-      dot: "bg-[#F5B843]",
-    },
-
-    connected: {
-      label: "Live",
-      className: "bg-[#34D399]/10 text-[#34D399]",
-      dot: "bg-[#34D399]",
-    },
-
-    closed: {
-      label: "History loaded",
-      className: "bg-white/5 text-[#8A93A6]",
-      dot: "bg-[#8A93A6]",
-    },
-
-    error: {
-      label: "Connection error",
-      className: "bg-[#F2665A]/10 text-[#F2665A]",
-      dot: "bg-[#F2665A]",
-    },
-  };
-
-  const current =
-    config[status] ?? config.connecting;
-
-  return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${current.className}`}
-    >
+    <li className="relative pl-8 pb-8 last:pb-0">
       <span
-        className={`h-1.5 w-1.5 rounded-full ${current.dot}`}
+        className={`absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-[#12161E] ${newest ? "bg-[#818CF8]" : "bg-[#384152]"}`}
       />
-
-      {current.label}
-    </span>
-  );
-}
-
-function NodeIcon({
-  node,
-  activeNode,
-  completedNodes,
-}) {
-  const isActive = node === activeNode;
-  const isCompleted = completedNodes.includes(node);
-
-  if (isCompleted) {
-    return (
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#34D399]/30 bg-[#34D399]/10 text-[#34D399]">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          className="h-4 w-4"
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="text-sm font-medium text-[#E7E9EE]">
+          {LABELS[event.event_type] || toTitleCase(event.event_type)}
+        </p>
+        <time
+          dateTime={event.created_at}
+          title={new Date(event.created_at).toLocaleString()}
+          className="text-xs tabular-nums text-[#8A93A6]"
         >
-          <path d="m5 12 4 4L19 6" />
-        </svg>
+          {new Date(event.created_at).toLocaleString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })}
+        </time>
       </div>
-    );
-  }
-
-  if (isActive) {
-    return (
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#818CF8]/50 bg-[#818CF8]/15">
-        <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#818CF8]" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#262C38] bg-[#0E1116]">
-      <span className="h-2 w-2 rounded-full bg-[#5B6472]" />
-    </div>
-  );
-}
-
-function EventItem({ event, index }) {
-  const eventNode = getEventNode(event);
-  const description = getEventDescription(event);
-  const payload = formatPayload(event?.payload);
-
-  return (
-    <div className="relative flex gap-3">
-      <div className="flex w-7 shrink-0 flex-col items-center">
-        <div className="flex h-7 w-7 items-center justify-center rounded-full border border-[#262C38] bg-[#161A22] text-[10px] font-semibold text-[#8A93A6]">
-          {index + 1}
-        </div>
-
-        <div className="mt-2 h-full min-h-5 w-px bg-[#262C38]" />
-      </div>
-
-      <div className="min-w-0 flex-1 pb-5">
-        <div className="rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-3">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-[#E7E9EE]">
-                {formatEventName(event?.event_type)}
-              </p>
-
-              {eventNode && (
-                <p className="mt-1 text-xs text-[#818CF8]">
-                  {formatNodeName(eventNode)}
-                </p>
-              )}
-            </div>
-
-            <span className="shrink-0 text-[11px] tabular-nums text-[#5B6472]">
-              {formatTime(getEventTimestamp(event))}
-            </span>
-          </div>
-
-          {description && (
-            <p className="mt-3 text-sm leading-relaxed text-[#8A93A6]">
-              {typeof description === "string"
-                ? description
-                : JSON.stringify(description)}
-            </p>
-          )}
-
-          {payload && (
-            <details className="mt-3">
-              <summary className="cursor-pointer text-xs font-medium text-[#5B6472] transition-colors hover:text-[#8A93A6]">
-                View payload
-              </summary>
-
-              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[#262C38] bg-[#0E1116] p-3 font-mono text-[11px] leading-relaxed text-[#8A93A6]">
-                {payload}
-              </pre>
-            </details>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyTimeline() {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#262C38] bg-[#161A22] px-6 py-14 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-[#5B6472]">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          className="h-5 w-5"
-        >
-          <path d="M3 12h4l3-8 4 16 3-8h4" />
-        </svg>
-      </div>
-
-      <p className="mt-4 text-sm font-medium text-[#E7E9EE]">
-        No execution events
-      </p>
-
-      <p className="mt-1 max-w-sm text-xs leading-relaxed text-[#5B6472]">
-        This ticket does not have any recorded agent events.
-      </p>
-    </div>
-  );
-}
-
-export default function LiveTrace() {
-  const [searchParams, setSearchParams] =
-    useSearchParams();
-
-  const urlTicketId = searchParams.get("ticketId");
-
-  const [tickets, setTickets] = useState([]);
-  const [selectedTicketId, setSelectedTicketId] =
-    useState(urlTicketId);
-
-  const [loadingTickets, setLoadingTickets] =
-    useState(true);
-
-  const [ticketError, setTicketError] =
-    useState("");
-
-  const [search, setSearch] = useState("");
-
-  /*
-   * Load every ticket visible to the current user. New tickets can be
-   * queued, processing, awaiting review, or resolved, so Live Trace must
-   * not limit the list to /tickets/completed.
-   */
-  async function loadTraceTickets() {
-    try {
-      setTicketError("");
-
-      const data = await fetchTickets();
-      const traceTickets = Array.isArray(data) ? data : [];
-
-      traceTickets.sort(
-        (a, b) =>
-          new Date(b.created_at ?? b.createdAt).getTime() -
-          new Date(a.created_at ?? a.createdAt).getTime()
-      );
-
-      setTickets(traceTickets);
-
-      const urlMatch = traceTickets.find(
-        (ticket) =>
-          String(ticket.id) === String(urlTicketId)
-      );
-
-      if (urlMatch) {
-        setSelectedTicketId(String(urlMatch.id));
-        return;
-      }
-
-      if (traceTickets.length > 0) {
-        const newest = traceTickets[0];
-        setSelectedTicketId(String(newest.id));
-        setSearchParams(
-          { ticketId: String(newest.id) },
-          { replace: true }
-        );
-      } else {
-        setSelectedTicketId(null);
-      }
-    } catch (error) {
-      console.error("Failed to load trace tickets:", error);
-      setTicketError(
-        error.message || "Failed to load trace tickets."
-      );
-    } finally {
-      setLoadingTickets(false);
-    }
-  }
-
-  useEffect(() => {
-    loadTraceTickets();
-
-    // Keep the list fresh so a newly submitted/processing ticket appears
-    // without requiring a page refresh.
-    const interval = setInterval(
-      loadTraceTickets,
-      3000
-    );
-
-    return () => clearInterval(interval);
-  }, [urlTicketId]);
-
-  /*
-   * Select the ticket from the left-hand list.
-   */
-  function selectTicket(ticketId) {
-    const id = String(ticketId);
-
-    setSelectedTicketId(id);
-
-    setSearchParams(
-      {
-        ticketId: id,
-      },
-      {
-        replace: true,
-      }
-    );
-  }
-
-  const selectedTicket = useMemo(
-    () =>
-      tickets.find(
-        (ticket) =>
-          String(ticket.id) ===
-          String(selectedTicketId)
-      ) ?? null,
-    [tickets, selectedTicketId]
-  );
-
-  const filteredTickets = useMemo(() => {
-    const query = search
-      .trim()
-      .toLowerCase();
-
-    if (!query) return tickets;
-
-    return tickets.filter((ticket) => {
-      return (
-        String(ticket.id)
-          .toLowerCase()
-          .includes(query) ||
-        ticket.subject
-          ?.toLowerCase()
-          .includes(query) ||
-        ticket.description
-          ?.toLowerCase()
-          .includes(query)
-      );
-    });
-  }, [tickets, search]);
-
-  /*
-   * This is the actual live/history connection.
-   *
-   * For any ticket, the websocket first returns the complete DB history,
-   * then remains available for any new events.
-   */
-  const {
-    events,
-    activeNode,
-    completedNodes,
-    connectionStatus,
-  } = useTicketWebSocket(selectedTicketId);
-
-  const completedCount =
-    completedNodes.length;
-
-  const knownNodes = useMemo(() => {
-    const observed = new Set();
-    const observedOrder = [];
-
-    const addNode = (node) => {
-      if (!node || observed.has(node)) return;
-      observed.add(node);
-      observedOrder.push(node);
-    };
-
-    events.forEach((event) => addNode(getEventNode(event)));
-    completedNodes.forEach(addNode);
-    addNode(activeNode);
-
-    const preferredOrder = NODE_ORDER.filter((node) => observed.has(node));
-    const extraNodes = observedOrder.filter((node) => !NODE_ORDER.includes(node));
-
-    return [...preferredOrder, ...extraNodes];
-  }, [events, activeNode, completedNodes]);
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium uppercase tracking-wider text-[#5B6472]">
-              Execution
-            </span>
-
-            <span className="text-xs text-[#5B6472]">
-              /
-            </span>
-
-            <span className="text-xs font-medium text-[#8A93A6]">
-              All tickets
-            </span>
-          </div>
-
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[#E7E9EE] sm:text-3xl">
-            Live agent trace
-          </h2>
-
-          <p className="mt-1 text-sm text-[#8A93A6]">
-            Select a ticket to inspect its complete
-            agent execution history.
-          </p>
-        </div>
-
-        <button
-          onClick={() => {
-            setLoadingTickets(true);
-            loadTraceTickets();
-          }}
-          disabled={loadingTickets}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-2 text-sm font-medium text-[#C7CBD4] transition hover:border-[#3A4250] hover:bg-[#1B2029] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            className={`h-4 w-4 ${
-              loadingTickets
-                ? "animate-spin"
-                : ""
-            }`}
-          >
-            <path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 5v4h4M4 13a8.1 8.1 0 0 0 14.9 4M20 19v-4h-4" />
-          </svg>
-
-          Refresh
-        </button>
-      </div>
-
-      {ticketError && (
-        <div className="rounded-xl border border-[#F2665A]/20 bg-[#F2665A]/5 px-5 py-4">
-          <p className="text-sm font-medium text-[#F2665A]">
-            Could not load tickets
-          </p>
-
-          <p className="mt-1 text-sm text-[#8A93A6]">
-            {ticketError}
-          </p>
-        </div>
+      {summary(event) && (
+        <p className="mt-2 text-sm leading-relaxed text-[#8A93A6]">
+          {summary(event)}
+        </p>
       )}
-
-      {/* Main split view */}
-      <div className="grid min-h-[650px] grid-cols-1 overflow-hidden rounded-xl border border-[#262C38] bg-[#0E1116] xl:grid-cols-[340px_minmax(0,1fr)]">
-        {/* Ticket list */}
-        <aside className="border-b border-[#262C38] bg-[#12161D] xl:border-b-0 xl:border-r">
-          <div className="border-b border-[#262C38] p-4">
-            <div className="flex items-center justify-between">
+      {event.payload && Object.keys(event.payload).length > 0 && (
+        <details className="mt-3 text-xs text-[#8A93A6]">
+          <summary className="w-fit cursor-pointer rounded py-1 text-[#818CF8] focus-visible:outline-2 focus-visible:outline-[#818CF8]">
+            Event details
+          </summary>
+          <div className="mt-3 space-y-4 rounded-lg border border-[#262C38] bg-[#0E1116] p-4">
+            {Object.entries(event.payload).map(([key, value]) => (
+              <div key={key}>
+                <p className="mb-1 font-medium">{toTitleCase(key)}</p>
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-[#CBD1DD]">
+                  {typeof value === "string"
+                    ? value
+                    : JSON.stringify(value, null, 2)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </li>
+  );
+}
+function TicketOutput({ ticketId, revision, status }) {
+  const [data, setData] = useState({
+    ticketId: null,
+    drafts: [],
+    resolution: null,
+    error: "",
+  });
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetchTicketDrafts(ticketId),
+      status === "resolved"
+        ? fetchTicketResolution(ticketId)
+        : Promise.resolve(null),
+    ])
+      .then(([drafts, resolution]) => {
+        if (!cancelled) setData({ ticketId, drafts, resolution, error: "" });
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setData({
+            ticketId,
+            drafts: [],
+            resolution: null,
+            error: err.message,
+          });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ticketId, revision, status]);
+  if (data.ticketId !== ticketId) return null;
+  return (
+    <>
+      {data.error && (
+        <p role="alert" className="mt-4 text-sm text-[#F2665A]">
+          {data.error}
+        </p>
+      )}
+      {(data.drafts.length > 0 || data.resolution) && (
+        <details className="mt-6 border-t border-[#262C38] pt-5">
+          <summary className="cursor-pointer text-sm text-[#818CF8]">
+            Drafts & resolution
+          </summary>
+          <div className="mt-5 space-y-6 text-sm leading-relaxed">
+            {data.resolution && (
               <div>
-                <p className="text-sm font-semibold text-[#E7E9EE]">
-                  All tickets
+                <p className="mb-2 font-medium text-[#34D399]">
+                  Final resolution
                 </p>
-
-                <p className="mt-1 text-xs text-[#5B6472]">
-                  {tickets.length}{" "}
-                  {tickets.length === 1
-                    ? "ticket"
-                    : "tickets"}
+                <p className="whitespace-pre-wrap text-[#CBD1DD]">
+                  {data.resolution.resolutionText}
                 </p>
               </div>
-
-              <span className="rounded-full bg-[#818CF8]/10 px-2.5 py-1 text-xs font-medium text-[#A5AEFF]">
-                Live
-              </span>
-            </div>
-
-            {/* Search */}
-            <div className="relative mt-4">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5B6472]"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-4-4" />
-              </svg>
-
-              <input
-                value={search}
-                onChange={(e) =>
-                  setSearch(e.target.value)
-                }
-                placeholder="Search tickets..."
-                className="w-full rounded-lg border border-[#262C38] bg-[#0E1116] py-2.5 pl-9 pr-3 text-xs text-[#E7E9EE] outline-none placeholder:text-[#4F5867] focus:border-[#818CF8]/50"
-              />
-            </div>
-          </div>
-
-          {/* Tickets */}
-          <div className="max-h-[650px] overflow-y-auto">
-            {loadingTickets &&
-            tickets.length === 0 ? (
-              <div className="space-y-2 p-3">
-                {[1, 2, 3, 4].map(
-                  (item) => (
-                    <div
-                      key={item}
-                      className="animate-pulse rounded-lg border border-[#262C38] bg-[#161A22] p-4"
-                    >
-                      <div className="h-3 w-16 rounded bg-[#262C38]" />
-                      <div className="mt-3 h-3 w-4/5 rounded bg-[#262C38]" />
-                      <div className="mt-2 h-2 w-2/3 rounded bg-[#262C38]" />
-                    </div>
-                  )
+            )}
+            {data.drafts.map((draft) => (
+              <div key={draft.id}>
+                <p className="mb-2 font-medium">
+                  Draft #{draft.id} · {toTitleCase(draft.status)}
+                </p>
+                <p className="whitespace-pre-wrap text-[#CBD1DD]">
+                  {draft.draftText}
+                </p>
+                {draft.analysis && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-[#8A93A6]">
+                      Agent analysis
+                    </summary>
+                    <pre className="mt-3 overflow-auto whitespace-pre-wrap break-words font-sans text-[#8A93A6]">
+                      {typeof draft.analysis === "string"
+                        ? draft.analysis
+                        : JSON.stringify(draft.analysis, null, 2)}
+                    </pre>
+                  </details>
                 )}
               </div>
-            ) : filteredTickets.length === 0 ? (
-              <div className="px-5 py-12 text-center">
-                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/5 text-[#5B6472]">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    className="h-5 w-5"
-                  >
-                    <path d="M4 6h16v12H4z" />
-                    <path d="M8 10h8M8 14h5" />
-                  </svg>
-                </div>
-
-                <p className="mt-4 text-sm font-medium text-[#E7E9EE]">
-                  No tickets found
-                </p>
-
-                <p className="mt-1 text-xs leading-relaxed text-[#5B6472]">
-                  Newly submitted and processed tickets will appear here automatically.
-                </p>
-              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+export default function LiveTrace() {
+  const { tickets, loading: ticketsLoading } = useDashboard();
+  const [params, setParams] = useSearchParams();
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const requestedId = params.get("ticketId");
+  const selectedId = requestedId ? Number(requestedId) : tickets[0]?.id;
+  const ticket = tickets.find((row) => row.id === selectedId);
+  const { events, loading, error, connectionStatus } = useTicketWebSocket(
+    ticket?.id,
+  );
+  const latest = events.at(-1);
+  const status = ticket?.status;
+  const style = STATUS_STYLES[status] || STATUS_STYLES.queued;
+  const visible = tickets.filter(
+    (row) =>
+      (filter === "all" ||
+        (filter === "resolved"
+          ? row.status === "resolved"
+          : row.status !== "resolved")) &&
+      `${row.id} ${row.subject} ${row.customerName}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  const steps = ["Received", "Agent working", "Human review", "Resolved"];
+  const stage =
+    status === "resolved"
+      ? 3
+      : [
+            "awaiting_approval",
+            "awaiting_clarification",
+            "needs_manual_review",
+            "failed",
+          ].includes(status)
+        ? 2
+        : status === "processing"
+          ? 1
+          : 0;
+  const idleActivity = {
+    queued: "Waiting for the worker to pick up this ticket",
+    awaiting_approval: "Response ready — review it before sending",
+    awaiting_clarification: "The agent needs an answer before it can continue",
+    needs_manual_review: "A human needs to review and resolve this ticket",
+    failed: "The agent stopped — open needs attention to resolve it",
+    resolved: "Resolution saved — the complete history is available below",
+  };
+  const activity = status === "processing" && latest
+    ? summary(latest) || LABELS[latest.event_type]
+    : idleActivity[status] || style.label;
+  return (
+    <div>
+      <div className="mb-8">
+        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          Live trace
+        </h2>
+        <p className="mt-2 text-sm text-[#8A93A6]">
+          Follow the agent’s work, or revisit any ticket’s history.
+        </p>
+      </div>
+      <div className="grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <aside
+          className="rounded-xl border border-[#262C38] bg-[#12161E] p-4"
+          aria-label="Ticket history selector"
+        >
+          <label
+            htmlFor="trace-search"
+            className="mb-3 block text-xs font-medium uppercase tracking-wider text-[#8A93A6]"
+          >
+            Tickets · {tickets.length}
+          </label>
+          <input
+            id="trace-search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search subject, customer or ID"
+            className="w-full rounded-lg border border-[#262C38] bg-[#0E1116] px-3 py-2.5 text-sm outline-none placeholder:text-[#5B6472] focus:border-[#818CF8]"
+          />
+          <div className="mt-3 flex gap-1" aria-label="Filter tickets">
+            {[
+              ["all", "All"],
+              ["active", "Active"],
+              ["resolved", "Resolved"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                aria-pressed={filter === key}
+                className={`flex-1 rounded-md py-2 text-xs ${filter === key ? "bg-[#818CF8]/12 text-[#ADB5FC]" : "text-[#8A93A6] hover:bg-white/5"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 max-h-64 space-y-1 overflow-y-auto lg:max-h-[65vh]">
+            {ticketsLoading ? (
+              <p className="p-3 text-sm text-[#8A93A6]">Loading tickets…</p>
+            ) : visible.length === 0 ? (
+              <p className="p-3 text-sm text-[#8A93A6]">No matching tickets.</p>
             ) : (
-              filteredTickets.map(
-                (ticket) => {
-                  const selected =
-                    String(ticket.id) ===
-                    String(selectedTicketId);
-
-                  return (
-                    <button
-                      key={ticket.id}
-                      onClick={() =>
-                        selectTicket(
-                          ticket.id
-                        )
-                      }
-                      className={`w-full border-b border-[#262C38] px-4 py-4 text-left transition ${
-                        selected
-                          ? "bg-[#1A1F2E]"
-                          : "hover:bg-[#161A22]"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <span
-                          className={`text-[11px] font-semibold ${
-                            selected
-                              ? "text-[#A5AEFF]"
-                              : "text-[#5B6472]"
-                          }`}
-                        >
-                          TICKET #{ticket.id}
-                        </span>
-
-                        <span className="shrink-0 text-[10px] text-[#5B6472]">
-                          {formatDate(
-                            ticket.created_at
-                          )}
-                        </span>
-                      </div>
-
-                      <p className="mt-2 line-clamp-2 text-sm font-medium leading-snug text-[#E7E9EE]">
-                        {ticket.subject}
-                      </p>
-
-                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#687282]">
-                        {ticket.description}
-                      </p>
-
-                      <div className="mt-3 flex items-center gap-2">
-                        <span className="rounded-md bg-[#818CF8]/10 px-2 py-1 text-[10px] font-medium text-[#A5AEFF]">
-                          {String(ticket.status ?? "unknown").replace(/_/g, " ")}
-                        </span>
-
-                        {ticket.category && (
-                          <span className="truncate rounded-md bg-white/5 px-2 py-1 text-[10px] text-[#687282]">
-                            {String(
-                              ticket.category
-                            ).replace(
-                              /_/g,
-                              " "
-                            )}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                }
-              )
+              visible.map((row) => (
+                <button
+                  key={row.id}
+                  onClick={() => setParams({ ticketId: row.id })}
+                  aria-pressed={row.id === selectedId}
+                  className={`w-full rounded-lg px-3 py-4 text-left ${row.id === selectedId ? "bg-[#818CF8]/10 ring-1 ring-inset ring-[#818CF8]/25" : "hover:bg-white/5"}`}
+                >
+                  <p className="text-xs text-[#8A93A6]">
+                    #{row.id} ·{" "}
+                    {STATUS_STYLES[row.status]?.label ||
+                      toTitleCase(row.status)}
+                  </p>
+                  <p className="mt-2 truncate text-sm font-medium">
+                    {row.subject}
+                  </p>
+                  <p className="mt-1 truncate text-xs text-[#8A93A6]">
+                    {row.customerName}
+                  </p>
+                </button>
+              ))
             )}
           </div>
         </aside>
-
-        {/* Trace */}
-        <main className="min-w-0 bg-[#0E1116]">
-          {!selectedTicket ? (
-            <div className="flex h-full min-h-[650px] items-center justify-center px-6">
-              <div className="max-w-md text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/5 text-[#5B6472]">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    className="h-6 w-6"
-                  >
-                    <path d="M3 12h4l3-8 4 16 3-8h4" />
-                  </svg>
-                </div>
-
-                <h3 className="mt-5 text-base font-semibold text-[#E7E9EE]">
-                  Select a ticket
-                </h3>
-
-                <p className="mt-2 text-sm leading-relaxed text-[#5B6472]">
-                  Choose a ticket from the list to inspect
-                  its complete execution history.
+        {!ticket ? (
+          <div className="rounded-xl border border-[#262C38] bg-[#12161E] px-6 py-16 text-center text-sm text-[#8A93A6]">
+            {ticketsLoading
+              ? "Loading ticket…"
+              : requestedId
+                ? "This ticket is unavailable in your queue. Choose another ticket to view its history."
+                : "Your tickets will appear here after a complaint is submitted."}
+          </div>
+        ) : (
+          <section
+            key={ticket.id}
+            className="min-w-0 rounded-xl border border-[#262C38] bg-[#12161E] p-6 sm:p-8"
+            aria-label="Selected ticket trace"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-[#8A93A6]">
+                Ticket #{ticket.id} · {ticket.customerName}
+              </p>
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-medium ${style.pill}`}
+              >
+                {style.label}
+              </span>
+            </div>
+            <h3 className="mt-4 break-words text-xl font-medium leading-relaxed">
+              {ticket.subject}
+            </h3>
+            <details className="mt-3 text-sm text-[#8A93A6]">
+              <summary className="w-fit cursor-pointer">
+                Original complaint
+              </summary>
+              <p className="mt-3 whitespace-pre-wrap leading-relaxed">
+                {ticket.description}
+              </p>
+            </details>
+            <ol
+              className="my-8 grid grid-cols-4 gap-3"
+              aria-label="Ticket progress"
+            >
+              {steps.map((label, index) => (
+                <li
+                  key={label}
+                  aria-current={index === stage ? "step" : undefined}
+                  className={`border-t-2 pt-3 text-xs leading-relaxed ${index <= stage ? "border-[#818CF8] text-[#ADB5FC]" : "border-[#262C38] text-[#5B6472]"}`}
+                >
+                  {label}
+                </li>
+              ))}
+            </ol>
+            <div className="flex items-center gap-3 rounded-lg bg-[#0E1116] px-4 py-4">
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${status === "processing" ? "animate-pulse bg-[#818CF8]" : status === "resolved" ? "bg-[#34D399]" : "bg-[#F5B843]"}`}
+              />
+              <div className="min-w-0">
+                <p className="text-sm text-[#CBD1DD]">{activity}</p>
+                <p className="mt-1 text-xs text-[#8A93A6]">
+                  {latest
+                    ? `Last activity ${timeAgo(latest.created_at)}`
+                    : "Waiting for the worker to pick up this ticket"}
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="p-5 sm:p-6">
-              {/* Selected ticket header */}
-              <div className="border-b border-[#262C38] pb-5">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium uppercase tracking-wider text-[#5B6472]">
-                        Ticket #{selectedTicket.id}
-                      </span>
-
-                      <span className="text-xs text-[#5B6472]">
-                        /
-                      </span>
-
-                      <span className="text-xs text-[#A5AEFF]">
-                        {String(selectedTicket.status ?? "unknown").replace(/_/g, " ")}
-                      </span>
-                    </div>
-
-                    <h3 className="mt-2 text-xl font-semibold text-[#E7E9EE]">
-                      {selectedTicket.subject}
-                    </h3>
-
-                    <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[#8A93A6]">
-                      {selectedTicket.description}
-                    </p>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      {selectedTicket.category && (
-                        <span className="rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-[#8A93A6]">
-                          Category:{" "}
-                          {String(
-                            selectedTicket.category
-                          ).replace(
-                            /_/g,
-                            " "
-                          )}
-                        </span>
-                      )}
-
-                      {selectedTicket.priority && (
-                        <span className="rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-[#8A93A6]">
-                          Priority:{" "}
-                          {String(
-                            selectedTicket.priority
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <StatusBadge
-                    status={connectionStatus}
-                  />
-                </div>
-              </div>
-
-              {/* Summary */}
-              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-3">
-                  <p className="text-[11px] text-[#5B6472]">
-                    Events
-                  </p>
-
-                  <p className="mt-1 text-lg font-semibold tabular-nums text-[#E7E9EE]">
-                    {events.length}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-3">
-                  <p className="text-[11px] text-[#5B6472]">
-                    Completed nodes
-                  </p>
-
-                  <p className="mt-1 text-lg font-semibold tabular-nums text-[#E7E9EE]">
-                    {completedCount}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-[#262C38] bg-[#161A22] px-4 py-3">
-                  <p className="text-[11px] text-[#5B6472]">
-                    Created
-                  </p>
-
-                  <p className="mt-1 text-sm font-semibold text-[#E7E9EE]">
-                    {formatDate(
-                      selectedTicket.created_at
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              {/* Trace */}
-              <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_270px]">
-                {/* Event timeline */}
-                <section className="min-w-0">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-base font-semibold text-[#E7E9EE]">
-                      Complete event history
-                    </h4>
-
-                    <span className="text-xs text-[#5B6472]">
-                      {events.length}{" "}
-                      {events.length === 1
-                        ? "event"
-                        : "events"}
-                    </span>
-                  </div>
-
-                  {events.length === 0 ? (
-                    <EmptyTimeline />
-                  ) : (
-                    <div className="rounded-xl border border-[#262C38] bg-[#0E1116] p-4 sm:p-5">
-                      {events.map(
-                        (event, index) => (
-                          <EventItem
-                            key={`${
-                              event?.id ??
-                              event?.event_type ??
-                              "event"
-                            }-${index}`}
-                            event={event}
-                            index={index}
-                          />
-                        )
-                      )}
-                    </div>
-                  )}
-                </section>
-
-                {/* Workflow */}
-                <section>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-base font-semibold text-[#E7E9EE]">
-                      Agent workflow
-                    </h4>
-
-                    <span className="text-xs text-[#5B6472]">
-                      {completedCount}/
-                      {knownNodes.length}
-                    </span>
-                  </div>
-
-                  <div className="rounded-xl border border-[#262C38] bg-[#161A22] p-4">
-                    <div className="space-y-1">
-                      {knownNodes.map(
-                        (node, index) => {
-                          const isLast =
-                            index ===
-                            knownNodes.length -
-                              1;
-
-                          return (
-                            <div
-                              key={node}
-                            >
-                              <div className="flex items-center gap-3 rounded-lg px-2 py-3">
-                                <NodeIcon
-                                  node={node}
-                                  activeNode={
-                                    activeNode
-                                  }
-                                  completedNodes={
-                                    completedNodes
-                                  }
-                                />
-
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium text-[#E7E9EE]">
-                                    {formatNodeName(
-                                      node
-                                    )}
-                                  </p>
-
-                                  <p className="mt-0.5 text-[11px] leading-relaxed text-[#5B6472]">
-                                    {NODE_DESCRIPTIONS[
-                                      node
-                                    ] ??
-                                      "Agent workflow node"}
-                                  </p>
-                                </div>
-                              </div>
-
-                              {!isLast && (
-                                <div className="ml-[25px] h-3 w-px bg-[#262C38]" />
-                              )}
-                            </div>
-                          );
-                        }
-                      )}
-                    </div>
-
-                    {activeNode && (
-                      <div className="mt-4 border-t border-[#262C38] pt-4">
-                        <p className="text-[10px] font-medium uppercase tracking-wider text-[#5B6472]">
-                          Currently running
-                        </p>
-
-                        <p className="mt-1 text-sm font-medium text-[#A5AEFF]">
-                          {formatNodeName(
-                            activeNode
-                          )}
-                        </p>
-                      </div>
-                    )}
-
-                    {!activeNode &&
-                      completedCount > 0 && (
-                        <div className="mt-4 border-t border-[#262C38] pt-4">
-                          <p className="text-xs text-[#34D399]">
-                            Agent execution
-                            complete.
-                          </p>
-                        </div>
-                      )}
-                  </div>
-                </section>
-              </div>
+            {stage === 2 && (
+              <Link
+                to={
+                  status === "awaiting_approval"
+                    ? "/dashboard/awaiting-review"
+                    : "/dashboard/needs-attention"
+                }
+                className="mt-4 inline-block text-sm text-[#818CF8] hover:underline"
+              >
+                {status === "awaiting_approval"
+                  ? "Review the response"
+                  : "Open needs attention"}{" "}
+                →
+              </Link>
+            )}
+            <div className="mt-10 flex flex-wrap items-center justify-between gap-2 border-b border-[#262C38] pb-4">
+              <h4 className="text-sm font-medium">
+                Activity history{" "}
+                <span className="ml-2 text-[#8A93A6]">{events.length}</span>
+              </h4>
+              <p className="flex items-center gap-2 text-xs text-[#8A93A6]">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${connectionStatus === "connected" ? "bg-[#34D399]" : "bg-[#F5B843]"}`}
+                />
+                {connectionStatus === "connected"
+                  ? "Live · latest first"
+                  : connectionStatus === "unauthorized"
+                    ? "Live connection unavailable"
+                    : "Reconnecting · refreshing automatically"}
+              </p>
             </div>
-          )}
-        </main>
+            {error && (
+              <p role="alert" className="mt-5 text-sm text-[#F2665A]">
+                {error}
+              </p>
+            )}
+            {loading ? (
+              <p className="py-8 text-sm text-[#8A93A6]">Loading history…</p>
+            ) : events.length === 0 ? (
+              <p className="py-8 text-sm text-[#8A93A6]">
+                No activity recorded yet.
+              </p>
+            ) : (
+              <ol
+                className="relative mt-8 before:absolute before:bottom-3 before:left-[4px] before:top-2 before:w-px before:bg-[#262C38]"
+                aria-label="Activity history"
+              >
+                {[...events].reverse().map((event, index) => (
+                  <EventItem
+                    key={event.id}
+                    event={event}
+                    newest={index === 0}
+                  />
+                ))}
+              </ol>
+            )}
+            <TicketOutput
+              ticketId={ticket.id}
+              revision={latest?.id}
+              status={status}
+            />
+          </section>
+        )}
       </div>
     </div>
   );

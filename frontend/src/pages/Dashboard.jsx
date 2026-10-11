@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StatCard from "../components/dashboard/StatCard";
 import AttentionQueue from "../components/dashboard/AttentionQueue";
@@ -8,8 +7,7 @@ import {
   AlertTriangleIcon,
   CheckCircleIcon,
 } from "../components/dashboard/icons";
-import { fetchCurrentUser, fetchTickets } from "../components/dashboard/api";
-import { bucketTickets } from "../components/dashboard/ticketBuckets";
+import { useDashboard } from "../components/dashboard/useDashboard";
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -18,49 +16,9 @@ function getGreeting() {
   return "Good evening";
 }
 
-const EMPTY_BUCKETS = {
-  unprocessed: [],
-  awaitingReview: [],
-  needsAttention: [],
-  resolved: [],
-};
-
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [tickets, setTickets] = useState([]);
-  const [user, setUser] = useState(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setError("");
-        const [currentTickets, currentUser] = await Promise.all([
-          fetchTickets(),
-          fetchCurrentUser(),
-        ]);
-
-        if (cancelled) return;
-        setTickets(currentTickets);
-        setUser(currentUser);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err.message || "Failed to load dashboard data.");
-      }
-    }
-
-    load();
-    const interval = setInterval(load, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  const buckets = tickets.length ? bucketTickets(tickets) : EMPTY_BUCKETS;
+  const { user, buckets, loading } = useDashboard();
   const firstName = user?.username?.split(" ")[0] || "there";
 
   return (
@@ -75,11 +33,7 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {error && (
-        <div className="mb-5 rounded-xl border border-[#F2665A]/20 bg-[#F2665A]/5 px-4 py-3 text-sm text-[#F2665A]">
-          {error}
-        </div>
-      )}
+      {loading && <p className="mb-5 text-sm text-[#8A93A6]">Loading dashboard…</p>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard

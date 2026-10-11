@@ -18,6 +18,8 @@ from agent.embeddings import embed_text
 from agent.queue import get_redis_pool
 from .services import record_ticket_event as record_ticket_event_service
 from arq.connections import ArqRedis
+from sqlalchemy import or_
+from agent.events import publish_persisted_events
 
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -32,8 +34,10 @@ async def create_ticket(payload: TicketCreateRequest, db: Session = Depends(get_
     db.add(new_ticket)
     db.commit()
     db.refresh(new_ticket)
-    db.add(TicketEvent(ticket_id=new_ticket.id, event_type=TicketEventType.QUEUED))
+    event = TicketEvent(ticket_id=new_ticket.id, event_type=TicketEventType.QUEUED)
+    db.add(event)
     db.commit()
+    publish_persisted_events([event])
     
     await redis.enqueue_job("process_ticket", new_ticket.id)
     return new_ticket
@@ -44,7 +48,13 @@ def list_tickets(db: Session = Depends(get_db), user = Depends(require_role(User
     if user.role == UserRole.ADMIN:
         return db.query(Ticket).order_by(Ticket.created_at.desc()).all()
     else:
-        return db.query(Ticket).filter(Ticket.assigned_agent_id==user.id).all()
+        # New complaints belong to the shared queue until someone owns them.
+        # Closed tickets are shared history, consistent with /completed.
+        return db.query(Ticket).filter(or_(
+            Ticket.assigned_agent_id.is_(None),
+            Ticket.assigned_agent_id == user.id,
+            Ticket.status == TicketStatus.RESOLVED,
+        )).order_by(Ticket.created_at.desc(), Ticket.id.desc()).all()
 
 @router.get("/completed",response_model=List[TicketResponse])
 def list_completed_tickets(db: Session = Depends(get_db),user=Depends(require_role(UserRole.ADMIN,UserRole.AGENT,UserRole.VIEWER))):
@@ -121,6 +131,7 @@ def review_draft(ticket_id: int, draft_id: int, payload: AgentDraftRequest, db: 
         raise HTTPException(status_code=404, detail="Draft not found for this ticket")
     if draft.status != DraftStatus.PENDING_REVIEW:
         raise HTTPException(status_code=400, detail="This draft has already been reviewed")
+    events = []
     if payload.action == "approve":
         draft.status = DraftStatus.APPROVED
         embedding = embed_text(draft.draft_text, input_type="search_document")
@@ -147,10 +158,10 @@ def review_draft(ticket_id: int, draft_id: int, payload: AgentDraftRequest, db: 
     if payload.action in ("approve", "edit"):
         ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
         ticket.status = TicketStatus.RESOLVED
-        db.add(TicketEvent(ticket_id=ticket_id,
+        events.append(TicketEvent(ticket_id=ticket_id,
                            event_type=TicketEventType.DRAFT_APPROVED if payload.action == 'approve' else TicketEventType.DRAFT_EDITED,
                            payload={"draft_id" : draft.id, "reviewed_by": user.id}))
-        db.add(TicketEvent(ticket_id=ticket_id,
+        events.append(TicketEvent(ticket_id=ticket_id,
                            event_type=TicketEventType.RESOLVED,
                            payload={'draft_id': draft_id, "reviewed_by": user.id}))
         
@@ -158,13 +169,15 @@ def review_draft(ticket_id: int, draft_id: int, payload: AgentDraftRequest, db: 
         draft.status = DraftStatus.REJECTED
         ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
         ticket.status = TicketStatus.NEEDS_MANUAL_REVIEW
-        db.add(TicketEvent(ticket_id=ticket_id,
+        events.append(TicketEvent(ticket_id=ticket_id,
                            event_type=TicketEventType.DRAFT_REJECTED,
                            payload={"draft_id": draft_id, "reviewed_by": user.id}))
         
     draft.reviewed_by = user.id
     draft.reviewed_at = datetime.now(timezone.utc)    
+    db.add_all(events)
     db.commit()
+    publish_persisted_events(events)
     db.refresh(draft)
     return draft
 
@@ -181,16 +194,19 @@ def resolve_manually(ticket_id: int, payload: ManualResolutionRequest, db: Sessi
         resolution_text=payload.resolution_text,
         embedding=embedding,
     )
+    events = []
     db.add(resolution)
     db.flush()
     ticket.status = TicketStatus.RESOLVED
     ticket.assigned_agent_id = user.id
 
-    db.add(TicketEvent(ticket_id=ticket_id, event_type=TicketEventType.RESOLVED,
+    events.append(TicketEvent(ticket_id=ticket_id, event_type=TicketEventType.RESOLVED,
                         payload={ "resolution_id": resolution.id,
                                   "resolved_by": user.id,
                                   "resolution_text_preview": payload.resolution_text[:100],}))
+    db.add_all(events)
     db.commit()
+    publish_persisted_events(events)
     db.refresh(ticket)
     return ticket
 
