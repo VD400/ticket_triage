@@ -5,7 +5,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 load_dotenv()
 
 with PostgresSaver.from_conn_string(
-    os.environ["DATABASE_URL"]
+    os.environ["ASYNC_DATABASE_URL"]
 ) as checkpointer:
     checkpointer.setup()
 

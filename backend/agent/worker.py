@@ -35,8 +35,8 @@ from models.ticket import Ticket, TicketStatus
 from models.agent_draft import AgentDraft, DraftStatus
 from models.ticket_event import TicketEvent, TicketEventType
 
-# ASYNC_DATABASE_URL is only for the checkpointer (needs an async driver,
-# e.g. postgresql+psycopg://... with async mode). SessionLocal stays sync —
+# ASYNC_DATABASE_URL is only for the psycopg checkpointer and uses a plain
+# postgresql://... URL, without SQLAlchemy's +psycopg suffix. SessionLocal stays sync —
 # see _fetch_ticket / _save_result below, which offload it to a thread so
 # it doesn't block the event loop.
 
