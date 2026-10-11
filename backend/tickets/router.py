@@ -20,6 +20,8 @@ from .services import record_ticket_event as record_ticket_event_service
 from arq.connections import ArqRedis
 from sqlalchemy import or_
 from agent.events import publish_persisted_events
+from agent.recovery import annotate_recovery, reserve_recovery
+from redis.exceptions import RedisError
 
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -46,15 +48,15 @@ async def create_ticket(payload: TicketCreateRequest, db: Session = Depends(get_
 @router.get("/", response_model=List[TicketResponse])
 def list_tickets(db: Session = Depends(get_db), user = Depends(require_role(UserRole.ADMIN, UserRole.AGENT, UserRole.VIEWER))):
     if user.role == UserRole.ADMIN:
-        return db.query(Ticket).order_by(Ticket.created_at.desc()).all()
+        return annotate_recovery(db, db.query(Ticket).order_by(Ticket.created_at.desc()).all())
     else:
         # New complaints belong to the shared queue until someone owns them.
         # Closed tickets are shared history, consistent with /completed.
-        return db.query(Ticket).filter(or_(
+        return annotate_recovery(db, db.query(Ticket).filter(or_(
             Ticket.assigned_agent_id.is_(None),
             Ticket.assigned_agent_id == user.id,
             Ticket.status == TicketStatus.RESOLVED,
-        )).order_by(Ticket.created_at.desc(), Ticket.id.desc()).all()
+        )).order_by(Ticket.created_at.desc(), Ticket.id.desc()).all())
 
 @router.get("/completed",response_model=List[TicketResponse])
 def list_completed_tickets(db: Session = Depends(get_db),user=Depends(require_role(UserRole.ADMIN,UserRole.AGENT,UserRole.VIEWER))):
@@ -89,7 +91,70 @@ def get_ticket(ticket_id: int, db: Session = Depends(get_db), user = Depends(req
     ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    return ticket
+    return annotate_recovery(db, [ticket])[0]
+
+
+@router.post("/{ticket_id}/retry", response_model=TicketResponse, status_code=202)
+async def retry_ticket(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(require_role(UserRole.ADMIN, UserRole.AGENT)),
+    redis: ArqRedis = Depends(get_redis_pool),
+):
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if user.role != UserRole.ADMIN and ticket.assigned_agent_id not in (None, user.id):
+        raise HTTPException(status_code=403, detail="This ticket belongs to another agent")
+    if not reserve_recovery(db, ticket_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A worker is still running this ticket. Please wait.",
+        )
+    db.refresh(ticket)
+    annotate_recovery(db, [ticket])
+    if not ticket.recovery_available:
+        raise HTTPException(
+            status_code=409,
+            detail=("Retry is available for failed tickets or queued/processing tickets "
+                    "with no activity for 10 minutes. Tickets waiting for review or "
+                    "clarification should be handled in their respective pages."),
+        )
+    previous_status = ticket.status.value
+    ticket.status = TicketStatus.QUEUED
+    event = TicketEvent(
+        ticket_id=ticket_id,
+        event_type=TicketEventType.QUEUED,
+        payload={"reason": "Recovery requested", "previous_status": previous_status,
+                 "requested_by": user.id},
+    )
+    db.add(event)
+    db.commit()  # Release the recovery lock before the worker can pick up its job.
+    publish_persisted_events([event])
+    try:
+        await redis.enqueue_job(
+            "process_ticket", ticket_id,
+            _job_id=f"ticket-recovery:{ticket_id}:{event.id}",
+        )
+    except (RedisError, OSError, TimeoutError):
+        # A legacy queued job may already have picked this ticket up. Preserve
+        # its active work or saved outcome if the queue request was ambiguous.
+        if reserve_recovery(db, ticket_id):
+            db.refresh(ticket)
+            if ticket.status in (TicketStatus.QUEUED, TicketStatus.PROCESSING):
+                ticket.status = TicketStatus.FAILED
+                failed = TicketEvent(
+                    ticket_id=ticket_id, event_type=TicketEventType.FAILED,
+                    payload={"message": "Recovery could not reach the queue. Check Redis and try again."},
+                )
+                db.add(failed)
+                db.commit()
+                publish_persisted_events([failed])
+        raise HTTPException(
+            status_code=503, detail="Could not queue recovery. Check Redis and try again."
+        )
+    db.refresh(ticket)
+    return annotate_recovery(db, [ticket])[0]
 
 
 @router.post("/{ticket_id}/clarify")

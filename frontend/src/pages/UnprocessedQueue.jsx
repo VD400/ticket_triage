@@ -1,3 +1,4 @@
+import RecoveryButton from "../components/dashboard/RecoveryButton";
 import { useState } from "react";
 import { ChevronRightIcon, ClockIcon } from "../components/dashboard/icons";
 import { Link } from "react-router-dom";
@@ -26,9 +27,10 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
             {isClassified
               ? ` · ${toTitleCase(ticket.category)} · ${toTitleCase(ticket.priority)}`
               : " · Not yet classified"}
+            {ticket.recovery_available && <span className="ml-2 text-[#F5B843]">· Recovery available</span>}
           </p>
         </div>
-        <span className="hidden shrink-0 text-xs text-[#5B6472] sm:inline">{timeAgo(ticket.createdAt)}</span>
+        <span className="hidden shrink-0 text-xs text-[#5B6472] sm:inline">Created {timeAgo(ticket.createdAt)}</span>
         <ChevronRightIcon className={`h-4 w-4 shrink-0 text-[#5B6472] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
       </button>
 
@@ -36,10 +38,13 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
         <div className="border-t border-[#262C38] px-4 py-3.5">
           <p className="text-sm leading-relaxed text-[#8A93A6]">{ticket.description}</p>
           <Link to={`/dashboard/liveTrace?ticketId=${ticket.id}`} className="mt-4 inline-block text-sm text-[#818CF8] hover:underline">Open trace →</Link>
-          {ticket.status === "processing" && (
+          <RecoveryButton ticket={ticket} />
+          {ticket.recovery_available ? (
+            <p className="mt-3 text-xs leading-relaxed text-[#F5B843]">No activity recorded for at least 10 minutes. Processing may have been interrupted. Open the trace to review its history, or retry processing.</p>
+          ) : ticket.status === "processing" && (
             <p className="mt-3 flex items-center gap-2 text-xs text-[#818CF8]">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#818CF8]" />
-              The agent is working through this ticket now
+              Processing — the dashboard is waiting for the next worker update
             </p>
           )}
         </div>
@@ -70,7 +75,7 @@ export default function UnprocessedQueue() {
             Unprocessed queue
           </h2>
           <p className="mt-1 text-sm text-[#8A93A6]">
-            Tickets still sitting in the queue or being classified — nothing here needs you yet.
+            Queued and processing complaints. If processing was interrupted, expand the ticket to recover it.
           </p>
         </div>
         <p className="hidden shrink-0 text-xs text-[#5B6472] sm:block">

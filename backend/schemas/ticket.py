@@ -23,6 +23,8 @@ class TicketResponse(BaseModel):
     status: Optional[TicketStatus]
     created_at: datetime
     updated_at: datetime
+    last_activity_at: Optional[datetime] = None
+    recovery_available: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
