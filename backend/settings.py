@@ -27,8 +27,6 @@ def cors_origins():
 def validate_hosted_settings():
     if not is_production():
         return
-    if not cors_origins() or frontend_url() not in cors_origins():
-        raise RuntimeError("CORS_ORIGINS must include FRONTEND_URL")
     for origin in [frontend_url(), *cors_origins()]:
         url = urlsplit(origin)
         if (
@@ -41,6 +39,8 @@ def validate_hosted_settings():
             or url.username
         ):
             raise RuntimeError("Production FRONTEND_URL/CORS_ORIGINS must be HTTPS website origins")
+    if not cors_origins() or frontend_url() not in cors_origins():
+        raise RuntimeError("CORS_ORIGINS must include FRONTEND_URL")
     if os.getenv("EMAIL_BACKEND", "console") not in ("resend", "smtp"):
         raise RuntimeError("Set EMAIL_BACKEND=resend or smtp for production email verification")
     required = ["EMAIL_FROM"]
