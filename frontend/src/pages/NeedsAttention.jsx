@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { useDashboard } from "../components/dashboard/useDashboard";
+import { useEffect, useState } from "react";
 import { ChevronRightIcon, AlertTriangleIcon } from "../components/dashboard/icons";
 import {
   fetchTicketDrafts,
   fetchTicketEvents,
-  fetchTickets,
   submitClarification,
   submitManualResolution,
 } from "../components/dashboard/api";
-import { bucketTickets, toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
+import { toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
 
 const TABS = [
   { key: "awaiting_clarification", label: "Needs clarification" },
   { key: "needs_manual_review", label: "Needs manual review" },
+  { key: "failed", label: "Processing failed" },
 ];
 
 function getClarificationQuestion(events) {
@@ -59,7 +61,8 @@ function TicketListItem({ ticket, isSelected, onSelect }) {
 }
 
 export default function NeedsAttention() {
-  const [tickets, setTickets] = useState([]);
+  const { buckets, loading, refresh: loadTickets } = useDashboard();
+  const tickets = buckets.needsAttention;
   const [activeTab, setActiveTab] = useState(TABS[0].key);
   const [selectedId, setSelectedId] = useState(null);
   const [answerText, setAnswerText] = useState("");
@@ -67,45 +70,15 @@ export default function NeedsAttention() {
   const [clarificationQuestion, setClarificationQuestion] = useState("");
   const [rejectedDraftText, setRejectedDraftText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [submittedIds, setSubmittedIds] = useState(() => new Set());
-
-  const loadTickets = useCallback(async () => {
-    const allTickets = await fetchTickets();
-    setTickets(bucketTickets(allTickets).needsAttention);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        if (!cancelled) setLoading(true);
-        await loadTickets();
-        if (!cancelled) setActionError("");
-      } catch (err) {
-        if (!cancelled) setActionError(err.message || "Failed to load tickets needing attention.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    const interval = setInterval(load, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [loadTickets]);
+  const [submittedVersions, setSubmittedVersions] = useState({});
 
   const visibleTickets = tickets.filter((ticket) => ticket.status === activeTab);
   const selectedTicket = visibleTickets.find((ticket) => ticket.id === selectedId) ?? null;
-  const isSubmitted = selectedTicket ? submittedIds.has(selectedTicket.id) : false;
+  const isSubmitted = selectedTicket ? submittedVersions[selectedTicket.id] === selectedTicket.updatedAt : false;
 
-  async function selectTicket(ticket) {
+  function selectTicket(ticket) {
     setSelectedId(ticket.id);
     setAnswerText("");
     setResolutionText("");
@@ -113,21 +86,23 @@ export default function NeedsAttention() {
     setRejectedDraftText("");
     setActionError("");
     setLoadingDetails(true);
-
-    try {
-      const [events, drafts] = await Promise.all([
-        fetchTicketEvents(ticket.id),
-        fetchTicketDrafts(ticket.id),
-      ]);
-
-      setClarificationQuestion(getClarificationQuestion(events));
-      setRejectedDraftText(getRejectedDraft(drafts)?.draftText ?? "");
-    } catch (err) {
-      setActionError(err.message || "Failed to load ticket details.");
-    } finally {
-      setLoadingDetails(false);
-    }
   }
+
+  const detailId = selectedTicket?.id;
+  const detailVersion = selectedTicket?.updatedAt;
+  useEffect(() => {
+    if (!detailId) return;
+    let cancelled = false;
+    Promise.all([fetchTicketEvents(detailId), fetchTicketDrafts(detailId)])
+      .then(([events, drafts]) => {
+        if (cancelled) return;
+        setClarificationQuestion(getClarificationQuestion(events));
+        setRejectedDraftText(getRejectedDraft(drafts)?.draftText ?? "");
+      })
+      .catch((err) => { if (!cancelled) setActionError(err.message || "Failed to load ticket details."); })
+      .finally(() => { if (!cancelled) setLoadingDetails(false); });
+    return () => { cancelled = true; };
+  }, [detailId, detailVersion]);
 
   function closeDetail() {
     setSelectedId(null);
@@ -146,7 +121,7 @@ export default function NeedsAttention() {
     setActionError("");
     try {
       await submitClarification(selectedTicket.id, answerText);
-      setSubmittedIds((prev) => new Set(prev).add(selectedTicket.id));
+      setSubmittedVersions((prev) => ({ ...prev, [selectedTicket.id]: selectedTicket.updatedAt }));
       await loadTickets();
     } catch (err) {
       setActionError(err.message || "Something went wrong submitting your answer.");
@@ -209,7 +184,7 @@ export default function NeedsAttention() {
       </div>
 
       <div className="flex gap-5">
-        <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
+        <div className={`w-full shrink-0 md:block md:w-80 ${selectedTicket ? "hidden" : "block"}`}>
           {loading ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <p className="text-sm text-[#5B6472]">Loading tickets…</p>
@@ -233,7 +208,7 @@ export default function NeedsAttention() {
           )}
         </div>
 
-        <div className={`min-w-0 flex-1 ${selectedId ? "block" : "hidden md:block"}`}>
+        <div className={`min-w-0 flex-1 ${selectedTicket ? "block" : "hidden md:block"}`}>
           {!selectedTicket ? (
             <div className="hidden h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
               <p className="text-sm text-[#5B6472]">Select a ticket to see what it needs.</p>
@@ -263,6 +238,7 @@ export default function NeedsAttention() {
               </div>
 
               <div className="space-y-5 px-5 py-5">
+                <Link to={`/dashboard/liveTrace?ticketId=${selectedTicket.id}`} className="inline-block text-sm text-[#818CF8] hover:underline">View full trace & history →</Link>
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">Original complaint</p>
                   <p className="text-sm leading-relaxed text-[#8A93A6]">{selectedTicket.description}</p>

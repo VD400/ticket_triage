@@ -2,7 +2,7 @@ export function bucketTickets(tickets) {
   return {
     unprocessed: tickets.filter((t) => ["queued", "processing"].includes(t.status)),
     awaitingReview: tickets.filter((t) => t.status === "awaiting_approval"),
-    needsAttention: tickets.filter((t) => ["needs_manual_review", "awaiting_clarification"].includes(t.status)),
+    needsAttention: tickets.filter((t) => ["needs_manual_review", "awaiting_clarification", "failed"].includes(t.status)),
     resolved: tickets.filter((t) => t.status === "resolved"),
   };
 }

@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronRightIcon, ClockIcon } from "../components/dashboard/icons";
-import { fetchTickets } from "../components/dashboard/api";
-import { bucketTickets, toTitleCase, timeAgo, STATUS_STYLES } from "../components/dashboard/ticketBuckets";
+import { Link } from "react-router-dom";
+import { useDashboard } from "../components/dashboard/useDashboard";
+import { toTitleCase, timeAgo, STATUS_STYLES } from "../components/dashboard/ticketBuckets";
 
-const REFRESH_INTERVAL_MS = 8000;
 
 function QueueRow({ ticket, isExpanded, onToggle }) {
   const statusStyle = STATUS_STYLES[ticket.status] ?? STATUS_STYLES.queued;
@@ -35,6 +35,7 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
       {isExpanded && (
         <div className="border-t border-[#262C38] px-4 py-3.5">
           <p className="text-sm leading-relaxed text-[#8A93A6]">{ticket.description}</p>
+          <Link to={`/dashboard/liveTrace?ticketId=${ticket.id}`} className="mt-4 inline-block text-sm text-[#818CF8] hover:underline">Open trace →</Link>
           {ticket.status === "processing" && (
             <p className="mt-3 flex items-center gap-2 text-xs text-[#818CF8]">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#818CF8]" />
@@ -48,35 +49,9 @@ function QueueRow({ ticket, isExpanded, onToggle }) {
 }
 
 export default function UnprocessedQueue() {
-  const [tickets, setTickets] = useState([]);
+  const { buckets, loading, lastRefreshed } = useDashboard();
+  const tickets = buckets.unprocessed;
   const [expandedIds, setExpandedIds] = useState(() => new Set());
-  const [lastRefreshed, setLastRefreshed] = useState(() => new Date());
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        const allTickets = await fetchTickets();
-        if (cancelled) return;
-        setTickets(bucketTickets(allTickets).unprocessed);
-        setLastRefreshed(new Date());
-        setError("");
-      } catch (err) {
-        if (cancelled) return;
-        setError(err.message || "Failed to load the queue.");
-      }
-    }
-
-    load();
-    const interval = setInterval(load, REFRESH_INTERVAL_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
 
   function toggleExpanded(id) {
     setExpandedIds((prev) => {
@@ -99,17 +74,11 @@ export default function UnprocessedQueue() {
           </p>
         </div>
         <p className="hidden shrink-0 text-xs text-[#5B6472] sm:block">
-          Updated {timeAgo(lastRefreshed.toISOString())}
+          {lastRefreshed ? `Updated ${timeAgo(lastRefreshed.toISOString())}` : "Loading…"}
         </p>
       </div>
 
-      {error && (
-        <div className="mb-5 rounded-xl border border-[#F2665A]/20 bg-[#F2665A]/5 px-4 py-3 text-sm text-[#F2665A]">
-          {error}
-        </div>
-      )}
-
-      {tickets.length === 0 ? (
+      {loading ? <p className="text-sm text-[#8A93A6]">Loading queue…</p> : tickets.length === 0 ? (
         <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
           <ClockIcon className="mx-auto h-6 w-6 text-[#5B6472]" />
           <p className="mt-3 text-sm text-[#8A93A6]">The queue is empty — every ticket has been picked up.</p>

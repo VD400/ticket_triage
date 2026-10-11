@@ -20,6 +20,7 @@ def _update_ticket(ticket_id: int, **fields):
     
 
 def classify_ticket(agent_state: AgentState):
+    _update_ticket(agent_state['ticket_id'], status=TicketStatus.PROCESSING)
     record_ticket_event(ticket_id=agent_state['ticket_id'], 
                         event_type=TicketEventType.PROCESSING_STARTED)
     
@@ -226,6 +227,8 @@ def human_assistance_node(agent_state : AgentState):
     #                     })
     question = agent_state["clarification_question"]
     _update_ticket(agent_state["ticket_id"], status=TicketStatus.AWAITING_CLARIFICATION)
+    from agent.events import publish_ticket_event
+    publish_ticket_event(agent_state["ticket_id"], {"type": "updated"})
     
     answer = interrupt({
         "type" : "human_clarification",

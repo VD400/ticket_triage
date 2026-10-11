@@ -34,6 +34,7 @@ from database import SessionLocal  # sync session factory
 from models.ticket import Ticket, TicketStatus
 from models.agent_draft import AgentDraft, DraftStatus
 from models.ticket_event import TicketEvent, TicketEventType
+from agent.events import publish_persisted_events
 
 # ASYNC_DATABASE_URL is only for the psycopg checkpointer and uses a plain
 # postgresql://... URL, without SQLAlchemy's +psycopg suffix. SessionLocal stays sync —
@@ -104,7 +105,11 @@ async def process_ticket(ctx: dict, ticket_id: int) -> None:
     # AgentState.ticket_id is an int, but LangGraph's checkpointer expects
     # thread_id as a string.
     config = {"configurable": {"thread_id": str(ticket_id)}}
-    result = await graph.ainvoke(initial_state, config=config)
+    try:
+        result = await graph.ainvoke(initial_state, config=config)
+    except Exception:
+        await asyncio.to_thread(_mark_failed, ticket_id)
+        raise
     if '__interrupt__' in result:
         return
     
@@ -120,7 +125,11 @@ async def resume_ticket(ctx: dict, ticket_id: int, human_feedback: str) -> None:
     paused on human_interrupt_node. Resumes the SAME thread_id."""
     graph = ctx["graph"]
     config = {"configurable": {"thread_id": str(ticket_id)}}
-    result = await graph.ainvoke(Command(resume=human_feedback), config=config)
+    try:
+        result = await graph.ainvoke(Command(resume=human_feedback), config=config)
+    except Exception:
+        await asyncio.to_thread(_mark_failed, ticket_id)
+        raise
     if '__interrupt__' in result:
         return 
     await asyncio.to_thread(
@@ -128,6 +137,19 @@ async def resume_ticket(ctx: dict, ticket_id: int, human_feedback: str) -> None:
         ticket_id,
         result
     )
+
+def _mark_failed(ticket_id: int) -> None:
+    with SessionLocal() as db:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is None:
+            return
+        ticket.status = TicketStatus.FAILED
+        event = TicketEvent(ticket_id=ticket_id, event_type=TicketEventType.FAILED,
+                            payload={"message": "The agent could not complete this ticket. Please review it manually."})
+        db.add(event)
+        db.commit()
+        publish_persisted_events([event])
+
 
 def _save_draft(ticket_id: int, result: dict) -> None:
     db = SessionLocal()
@@ -140,7 +162,8 @@ def _save_draft(ticket_id: int, result: dict) -> None:
         )
         db.add(draft)
         db.flush()
-        db.add(
+        events = []
+        events.append(
             TicketEvent(
                 ticket_id=ticket_id,
                 event_type=TicketEventType.DRAFT_CREATED,
@@ -150,7 +173,7 @@ def _save_draft(ticket_id: int, result: dict) -> None:
                 },
             )
         )
-        db.add(
+        events.append(
             TicketEvent(
                 ticket_id=ticket_id,
                 event_type=TicketEventType.AWAITING_APPROVAL,
@@ -163,10 +186,13 @@ def _save_draft(ticket_id: int, result: dict) -> None:
         if ticket:
             ticket.status = TicketStatus.AWAITING_APPROVAL
             
+        db.add_all(events)
         db.commit()
+        publish_persisted_events(events)
 
     except Exception:
         db.rollback()
+        _mark_failed(ticket_id)
         raise
 
     finally:

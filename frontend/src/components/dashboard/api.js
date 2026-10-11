@@ -1,3 +1,4 @@
+import { notifyTicketUpdate } from "./useDashboard";
 export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 export function authHeaders(includeJson = true) {
@@ -31,6 +32,7 @@ async function requestJson(path, options = {}) {
     );
   }
 
+  if (options.method && options.method !== "GET") notifyTicketUpdate();
   return data;
 }
 

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { useDashboard } from "../components/dashboard/useDashboard";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircleIcon, ChevronRightIcon } from "../components/dashboard/icons";
-import { fetchResolutions, fetchTickets } from "../components/dashboard/api";
+import { fetchResolutions } from "../components/dashboard/api";
 import { toTitleCase, timeAgo } from "../components/dashboard/ticketBuckets";
 
 function TicketListItem({ ticket, resolution, isSelected, onSelect }) {
@@ -27,54 +29,22 @@ function TicketListItem({ ticket, resolution, isSelected, onSelect }) {
 }
 
 export default function Resolved() {
-  const [tickets, setTickets] = useState([]);
+  const { buckets, loading } = useDashboard();
+  const tickets = buckets.resolved;
   const [resolutions, setResolutions] = useState({});
   const [selectedId, setSelectedId] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      setError("");
-      const [completedTickets, resolutionRows] = await Promise.all([
-        fetchTickets({ completed: true }),
-        fetchResolutions(),
-      ]);
-
-      const resolutionMap = Object.fromEntries(
-        resolutionRows.map((resolution) => [resolution.ticketId, resolution])
-      );
-
-      setTickets(completedTickets);
-      setResolutions(resolutionMap);
-
-      setSelectedId((current) => {
-        if (current && completedTickets.some((ticket) => ticket.id === current)) return current;
-        return completedTickets[0]?.id ?? null;
-      });
-    } catch (err) {
-      setError(err.message || "Failed to load resolved tickets.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function initialLoad() {
-      if (cancelled) return;
-      await load();
-    }
-
-    initialLoad();
-    const interval = setInterval(load, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [load]);
+    fetchResolutions().then((rows) => {
+      if (!cancelled) {
+        setResolutions(Object.fromEntries(rows.map((row) => [row.ticketId, row])));
+        setError("");
+      }
+    }).catch((err) => { if (!cancelled) setError(err.message || "Failed to load resolutions."); });
+    return () => { cancelled = true; };
+  }, [tickets]);
 
   const selectedTicket = useMemo(
     () => tickets.find((ticket) => ticket.id === selectedId) ?? null,
@@ -101,7 +71,7 @@ export default function Resolved() {
       )}
 
       <div className="flex gap-5">
-        <div className={`w-full shrink-0 md:block md:w-80 ${selectedId ? "hidden" : "block"}`}>
+        <div className={`w-full shrink-0 md:block md:w-80 ${selectedTicket ? "hidden" : "block"}`}>
           {loading ? (
             <div className="rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-12 text-center">
               <p className="text-sm text-[#5B6472]">Loading resolved tickets…</p>
@@ -126,7 +96,7 @@ export default function Resolved() {
           )}
         </div>
 
-        <div className={`min-w-0 flex-1 ${selectedId ? "block" : "hidden md:block"}`}>
+        <div className={`min-w-0 flex-1 ${selectedTicket ? "block" : "hidden md:block"}`}>
           {!selectedTicket ? (
             <div className="hidden h-full items-center justify-center rounded-xl border border-[#262C38] bg-[#161A22] px-4 py-16 text-center md:flex">
               <p className="text-sm text-[#5B6472]">Select a resolved ticket to see how it was handled.</p>
@@ -156,6 +126,7 @@ export default function Resolved() {
               </div>
 
               <div className="space-y-5 px-5 py-5">
+                <Link to={`/dashboard/liveTrace?ticketId=${selectedTicket.id}`} className="inline-block text-sm text-[#818CF8] hover:underline">View full trace & history →</Link>
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">Original complaint</p>
                   <p className="text-sm leading-relaxed text-[#8A93A6]">{selectedTicket.description}</p>

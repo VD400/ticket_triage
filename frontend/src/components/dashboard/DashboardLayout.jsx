@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
-import { fetchCurrentUser, fetchTickets } from "./api";
-import { bucketTickets } from "./ticketBuckets";
+import DashboardProvider from "./DashboardProvider";
+import { useDashboard } from "./useDashboard";
 
 const PAGE_TITLES = {
   "/dashboard": "Overview",
@@ -16,49 +16,16 @@ const PAGE_TITLES = {
   "/dashboard/settings": "Settings",
 };
 
-const EMPTY_BUCKETS = {
-  unprocessed: [],
-  awaitingReview: [],
-  needsAttention: [],
-  resolved: [],
-};
+export default function DashboardLayout(props) {
+  return <DashboardProvider><DashboardShell {...props} /></DashboardProvider>;
+}
 
-export default function DashboardLayout({ onLogout = () => {} }) {
+function DashboardShell({ onLogout = () => {} }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [user, setUser] = useState(null);
-  const [tickets, setTickets] = useState([]);
+  const { user, buckets, error, connectionStatus, refresh } = useDashboard();
   const location = useLocation();
   const pageTitle = PAGE_TITLES[location.pathname] ?? "Overview";
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadDashboardContext() {
-      try {
-        const [currentUser, currentTickets] = await Promise.all([
-          fetchCurrentUser(),
-          fetchTickets(),
-        ]);
-
-        if (cancelled) return;
-        setUser(currentUser);
-        setTickets(currentTickets);
-      } catch (error) {
-        if (cancelled) return;
-        console.error("Failed to load dashboard context:", error);
-      }
-    }
-
-    loadDashboardContext();
-    const interval = setInterval(loadDashboardContext, 10000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  const buckets = tickets.length ? bucketTickets(tickets) : EMPTY_BUCKETS;
   const currentUser = user
     ? { name: user.username, role: user.role }
     : { name: "", role: "viewer" };
@@ -86,6 +53,8 @@ export default function DashboardLayout({ onLogout = () => {} }) {
 
         <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
+            {error && <div role="alert" className="mb-5 flex items-center justify-between gap-4 rounded-lg border border-[#F2665A]/25 bg-[#F2665A]/5 px-4 py-3 text-sm text-[#F2665A]">{error}<button onClick={refresh} className="shrink-0 underline">Retry</button></div>}
+            {connectionStatus !== "connected" && <p className="mb-4 text-xs text-[#8A93A6]">Live connection {connectionStatus}. Tickets refresh automatically every 5 seconds.</p>}
             <Outlet />
           </div>
         </main>

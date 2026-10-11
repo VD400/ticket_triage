@@ -41,6 +41,7 @@ function App() {
         <Route path="resolved" element={<Resolved />}/>
         <Route path="liveTrace" element={<LiveTrace />}/>
       </Route>
+      <Route path="/customerComplaint" element={<CustomerComplaint />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
