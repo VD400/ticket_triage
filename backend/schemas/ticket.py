@@ -8,6 +8,7 @@ class TicketCreateRequest(BaseModel):
     customer_id: int
     subject: str
     description: str
+    verification_token: Optional[str] = None
 
 
 class TicketResponse(BaseModel):

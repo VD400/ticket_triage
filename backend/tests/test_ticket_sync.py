@@ -1,12 +1,14 @@
 """Shared queue visibility and live notifications after committed changes."""
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from models.customer import Customer
 from models.ticket import Ticket, TicketStatus
 from models.ticket_event import TicketEvent, TicketEventType
 from models.agent_draft import AgentDraft, DraftStatus
 from models.user import UserRole
+from models.verification_token import VerificationToken
 from agent.queue import get_redis_pool
 from main import app
 from tickets import router as ticket_router
@@ -57,6 +59,11 @@ def test_submission_publishes_persisted_queue_event(client, db_session, monkeypa
     customer = Customer(name="Customer", email="new@sync.test", email_verified=True)
     db_session.add(customer)
     db_session.commit()
+    db_session.add(VerificationToken(
+        customer_id=customer.id, token="verified-sync-token", used=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+    ))
+    db_session.commit()
     published, jobs = [], []
 
     class Queue:
@@ -75,6 +82,7 @@ def test_submission_publishes_persisted_queue_event(client, db_session, monkeypa
             "customer_id": customer.id,
             "subject": "Refund",
             "description": "Where is my refund?",
+            "verification_token": "verified-sync-token",
         },
     )
     assert response.status_code == 201

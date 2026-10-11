@@ -13,8 +13,8 @@ const STEPS = [
   },
   {
     number: "3",
-    title: "Get a reviewed response",
-    body: "A suggested fix is drafted right away, and an agent checks it before it reaches your inbox.",
+    title: "Get your case reviewed",
+    body: "An AI assistant investigates your complaint and prepares a draft for an agent to review.",
   },
 ];
 
@@ -51,8 +51,8 @@ export default function LandingPage() {
               Got a problem with your account? Let's fix it.
             </h1>
             <p className="mt-5 text-lg leading-relaxed text-[#8A93A6]">
-              File a complaint and we'll verify your email, look into it, and come back with a
-              resolution — checked by a real person before it ever reaches your inbox.
+              Verify your email and file a complaint. Our assistant investigates it, and a
+              support agent reviews the suggested resolution.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">

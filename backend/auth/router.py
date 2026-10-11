@@ -6,12 +6,19 @@ from models import User
 from .security import hash_password, verify_password  
 from .jwtToken import create_access_token
 from auth.dependencies import get_current_user
+from settings import is_production
+from models.user import UserRole
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
     
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    # Employee accounts are provisioned privately, never by a public visitor.
+    if is_production():
+        raise HTTPException(status_code=403, detail="Ask your administrator for an employee account")
+    if payload.role != UserRole.VIEWER:
+        raise HTTPException(status_code=403, detail="Privileged accounts must be provisioned privately")
     existing = db.query(User).filter(
         ((User.email == payload.email) | (User.username == payload.username))
     ).first()
