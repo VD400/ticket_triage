@@ -105,3 +105,34 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Check dashboard synchronization
         run: npm run test:e2e
+
+  deployment-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the locked Render image
+        run: |
+          build_status=0
+          docker build -t ticket-triage-check backend > /tmp/deployment-build.log 2>&1 || build_status=$?
+          cat /tmp/deployment-build.log
+          if [ "$build_status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          tail = "\n".join(Path("/tmp/deployment-build.log").read_text().splitlines()[-60:])
+          escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Render image build failed::{escaped}")
+          PY
+            exit "$build_status"
+          fi
+      - name: Check API and worker imports without provider calls
+        run: |
+          docker run --rm \
+            -e DATABASE_URL=postgresql+psycopg://triage@localhost:5432/triage \
+            -e ASYNC_DATABASE_URL=postgresql://triage@localhost:5432/triage \
+            -e READONLY_DB_URL=postgresql+psycopg://triage@localhost:5432/triage \
+            -e REDIS_URL=redis://localhost:6379/0 \
+            -e JWT_SECRET_KEY=test-key \
+            -e GROQ_API_KEY=test-key \
+            -e COHERE_API_KEY=test-key \
+            ticket-triage-check \
+            python -c 'import main, agent.worker, deployment.init_db; print("API and worker imports passed")'

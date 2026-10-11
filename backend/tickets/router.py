@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
-from models import Ticket
+from models import Ticket, Customer, VerificationToken
 from models.user import UserRole
 from models.ticket import TicketStatus
 from schemas.ticket import TicketCreateRequest, TicketResponse, ManualResolutionRequest, ClarificationAnswerRequest
@@ -28,6 +28,15 @@ router = APIRouter(prefix="/tickets", tags=["tickets"])
 
 @router.post("/", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
 async def create_ticket(payload: TicketCreateRequest, db: Session = Depends(get_db), redis: ArqRedis=Depends(get_redis_pool)):
+    verified = db.query(VerificationToken).join(Customer).filter(
+        VerificationToken.token == payload.verification_token,
+        VerificationToken.customer_id == payload.customer_id,
+        VerificationToken.used.is_(True),
+        VerificationToken.expires_at >= datetime.now(timezone.utc),
+        Customer.email_verified.is_(True),
+    ).first() if payload.verification_token else None
+    if not verified:
+        raise HTTPException(status_code=403, detail="Verify your email again before submitting a complaint")
     new_ticket = Ticket(
         customer_id=payload.customer_id,
         subject=payload.subject,

@@ -161,14 +161,9 @@ The CI checks use temporary PostgreSQL and Redis services and offline test keys.
 You do not need to add real Groq/Cohere keys as GitHub Actions secrets for these
 checks. The first hosted GitHub Actions result is available only after a push/PR.
 
-## 7. Deployment is a separate next step
+## 7. Deploy a shared demo
 
-Merging puts code on `main`; it does not configure new runtime services by itself.
-An actual deployment needs the API, a separate ARQ worker, PostgreSQL with
-pgvector/checkpoint tables, Redis, and the frontend. Configure real URLs and keys
-on Render/Vercel separately. The API currently allows only the frontend origin
-`http://localhost:5173` and prints mock email verification links using that origin;
-those settings need adjustment before a Vercel frontend can use it.
-
-Finish the cloud development setup and merge checks first. Deployment can then
-be configured against the actual provider URLs and existing project settings.
+Follow [DEPLOYMENT.md](DEPLOYMENT.md) for the separate Vercel frontend, Render API
+and background worker, Supabase database, Redis, and verification-email setup.
+The guide lists each provider's variables and commands. Codex settings are not
+automatically copied to deployment providers. Merging alone does not create services.

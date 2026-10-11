@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from schemas.customer import EmailVerificationRequest
 from database import get_db
 from models import Customer, VerificationToken
-from .email_verification import generate_verification_token
+from .email_verification import generate_verification_token, send_verification_email
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
@@ -27,8 +27,14 @@ def request_verification(payload: EmailVerificationRequest, db: Session = Depend
         expires_at=datetime.now(timezone.utc)+timedelta(minutes=30)
     )
     db.add(token)
+    db.flush()
+    try:
+        send_verification_email(customer.email, token_str)
+    except Exception:
+        db.rollback()
+        # Provider exceptions can contain credentials or the verification link.
+        raise HTTPException(status_code=502, detail="Could not send the verification email. Please try again.") from None
     db.commit()
-    print(f"[MOCK EMAIL] Verification link: http://localhost:5173/customerComplaint?token={token_str}")
     return {"message": "Verification email sent"}
 
 @router.get("/verify-email")

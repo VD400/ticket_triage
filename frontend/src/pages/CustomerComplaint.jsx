@@ -126,7 +126,7 @@ export default function CustomerComplaint() {
       const res = await fetch(`${API_BASE}/tickets/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer_id: customerId, subject, description }),
+        body: JSON.stringify({ customer_id: customerId, subject, description, verification_token: tokenFromLink }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -298,7 +298,7 @@ export default function CustomerComplaint() {
               <h1 className="mt-4 text-xl font-semibold text-[#E7E9EE]">Complaint filed</h1>
               <p className="mt-1.5 text-sm leading-relaxed text-[#8A93A6]">
                 Your ticket <span className="font-mono text-[#E7E9EE]">#{ticketId}</span> is in queue.
-                We'll email {email || "you"} once it's reviewed.
+                Your complaint is ready for our support team to review.
               </p>
               <button
                 type="button"
