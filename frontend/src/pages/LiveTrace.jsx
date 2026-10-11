@@ -1,3 +1,4 @@
+import RecoveryButton from "../components/dashboard/RecoveryButton";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import useTicketWebSocket from "../hooks/useTicketWebSocket";
@@ -57,6 +58,13 @@ function summary(event) {
   return p.reason || p.message;
 }
 function EventItem({ event, newest }) {
+  const recoveredLabels = {
+    "Recovery requested": "Recovery queued",
+    "Continuing saved progress": "Agent resumed saved progress",
+    "Recovered saved draft": "Saved draft restored for review",
+    "Recovered saved resolution": "Saved resolution restored",
+    "Recovered saved clarification": "Saved clarification restored",
+  };
   return (
     <li className="relative pl-8 pb-8 last:pb-0">
       <span
@@ -64,7 +72,9 @@ function EventItem({ event, newest }) {
       />
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <p className="text-sm font-medium text-[#E7E9EE]">
-          {LABELS[event.event_type] || toTitleCase(event.event_type)}
+          {recoveredLabels[event.payload?.reason] ||
+            LABELS[event.event_type] ||
+            toTitleCase(event.event_type)}
         </p>
         <time
           dateTime={event.created_at}
@@ -236,9 +246,10 @@ export default function LiveTrace() {
     failed: "The agent stopped — open needs attention to resolve it",
     resolved: "Resolution saved — the complete history is available below",
   };
-  const activity = status === "processing" && latest
-    ? summary(latest) || LABELS[latest.event_type]
-    : idleActivity[status] || style.label;
+  const activity =
+    status === "processing" && latest
+      ? summary(latest) || LABELS[latest.event_type]
+      : idleActivity[status] || style.label;
   return (
     <div>
       <div className="mb-8">
@@ -389,6 +400,7 @@ export default function LiveTrace() {
                 →
               </Link>
             )}
+            <RecoveryButton ticket={ticket} />
             <div className="mt-10 flex flex-wrap items-center justify-between gap-2 border-b border-[#262C38] pb-4">
               <h4 className="text-sm font-medium">
                 Activity history{" "}

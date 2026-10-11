@@ -144,3 +144,10 @@ export async function submitManualResolution(ticketId, resolutionText) {
     body: JSON.stringify({ resolution_text: resolutionText }),
   });
 }
+
+export async function retryTicket(ticketId) {
+  return requestJson(`/tickets/${ticketId}/retry`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+}

@@ -30,6 +30,8 @@ async function mockWorkspace(context) {
     resolutions: [],
     sockets: [],
     connections: 0,
+    retryCalls: 0,
+    retryError: null,
   };
   await context.addInitScript(() =>
     localStorage.setItem("token", "browser-test-token"),
@@ -48,7 +50,25 @@ async function mockWorkspace(context) {
       body = row;
     } else if (path === "/tickets/") body = state.tickets;
     else if (path === "/tickets/resolution") body = state.resolutions;
-    else {
+    else if (/^\/tickets\/\d+\/retry$/.test(path)) {
+      state.retryCalls++;
+      if (state.retryError) {
+        await route.fulfill({
+          status: 409,
+          json: { detail: state.retryError },
+        });
+        return;
+      }
+      const id = Number(path.split("/")[2]);
+      const row = state.tickets.find((row) => row.id === id);
+      row.status = "queued";
+      row.updated_at = new Date().toISOString();
+      row.recovery_available = false;
+      state.events[id].push(
+        event(88, id, "queued", { reason: "Recovery requested" }),
+      );
+      body = row;
+    } else {
       const match = path.match(
         /^\/tickets\/(\d+)\/(event|drafts|resolution)(?:\/(\d+)\/review)?$/,
       );
@@ -263,4 +283,83 @@ test("resolved history is searchable and ticket selection stays correct on mobil
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBeTruthy();
+});
+
+test("an interrupted ticket can be retried without creating another complaint", async ({
+  context,
+  page,
+}) => {
+  const state = await mockWorkspace(context);
+  const row = state.tickets[0];
+  row.status = "processing";
+  row.created_at = row.updated_at = new Date(
+    Date.now() - 19 * 86400000,
+  ).toISOString();
+  row.recovery_available = true;
+  await page.goto("/dashboard/unprocessed");
+  await page.getByRole("button", { name: /Refund request 1/ }).click();
+  await expect(
+    page.getByText(/No activity recorded for at least 10 minutes/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Retry processing" }).click();
+  await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry processing" }),
+  ).toHaveCount(0);
+  expect(state.retryCalls).toBe(1);
+  expect(state.tickets).toHaveLength(1);
+  await page.getByRole("link", { name: "Open trace" }).click();
+  await expect(
+    page
+      .getByRole("list", { name: "Activity history" })
+      .getByText("Recovery queued", { exact: true }),
+  ).toBeVisible();
+  state.update(
+    1,
+    "awaiting_approval",
+    event(89, 1, "awaiting_approval", { reason: "Recovered saved draft" }),
+  );
+  await expect(
+    page
+      .getByRole("region", { name: "Selected ticket trace" })
+      .getByText("Awaiting review", { exact: true }),
+  ).toBeVisible();
+});
+
+test("a live worker refusal is shown without hiding the interrupted ticket", async ({
+  context,
+  page,
+}) => {
+  const state = await mockWorkspace(context);
+  state.tickets[0].status = "processing";
+  state.tickets[0].recovery_available = true;
+  state.retryError = "A worker is still running this ticket. Please wait.";
+  await page.goto("/dashboard/unprocessed");
+  await page.getByRole("button", { name: /Refund request 1/ }).click();
+  await page.getByRole("button", { name: "Retry processing" }).click();
+  await expect(page.getByRole("alert")).toHaveText(state.retryError);
+  await expect(page.getByText("Processing", { exact: true })).toBeVisible();
+  expect(state.tickets).toHaveLength(1);
+});
+
+test("an old complaint with recent worker activity does not offer recovery", async ({
+  context,
+  page,
+}) => {
+  const state = await mockWorkspace(context);
+  state.tickets[0].status = "processing";
+  state.tickets[0].created_at = new Date(
+    Date.now() - 19 * 86400000,
+  ).toISOString();
+  state.tickets[0].updated_at = new Date().toISOString();
+  state.tickets[0].recovery_available = false;
+  await page.goto("/dashboard/unprocessed");
+  await page.getByRole("button", { name: /Refund request 1/ }).click();
+  await expect(page.getByText(/Created 19d ago/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry processing" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(/waiting for the next worker update/),
+  ).toBeVisible();
 });

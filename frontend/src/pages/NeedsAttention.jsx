@@ -1,3 +1,4 @@
+import RecoveryButton from "../components/dashboard/RecoveryButton";
 import { Link } from "react-router-dom";
 import { useDashboard } from "../components/dashboard/useDashboard";
 import { useEffect, useState } from "react";
@@ -238,6 +239,7 @@ export default function NeedsAttention() {
               </div>
 
               <div className="space-y-5 px-5 py-5">
+                <RecoveryButton ticket={selectedTicket} />
                 <Link to={`/dashboard/liveTrace?ticketId=${selectedTicket.id}`} className="inline-block text-sm text-[#818CF8] hover:underline">View full trace & history →</Link>
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-[#8A93A6]">Original complaint</p>

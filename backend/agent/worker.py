@@ -16,6 +16,7 @@ Design notes:
   on_startup and torn down in on_shutdown, not per-job — creating a fresh
   connection pool for every ticket would be wasteful and slow.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from arq.connections import RedisSettings
+from arq import Retry
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
@@ -35,6 +37,8 @@ from models.ticket import Ticket, TicketStatus
 from models.agent_draft import AgentDraft, DraftStatus
 from models.ticket_event import TicketEvent, TicketEventType
 from agent.events import publish_persisted_events
+from agent.recovery import ticket_run, JOB_TIMEOUT_SECONDS
+from models.ticket_resolution import TicketResolution
 
 # ASYNC_DATABASE_URL is only for the psycopg checkpointer and uses a plain
 # postgresql://... URL, without SQLAlchemy's +psycopg suffix. SessionLocal stays sync —
@@ -52,19 +56,20 @@ def _fetch_ticket(ticket_id: int) -> dict | None:
             print("Given ID not found")
             return None
         return {
-            "id" : ticket.id,
-            "description" : ticket.description
+            "id": ticket.id,
+            "description": ticket.description,
+            "status": ticket.status,
         }
     finally:
         db.close()
 
-REDIS_SETTINGS = RedisSettings.from_dsn(
-    os.environ["REDIS_URL"]
-)
+
+REDIS_SETTINGS = RedisSettings.from_dsn(os.environ["REDIS_URL"])
+
 
 async def on_startup(ctx: dict) -> None:
     # AsyncPostgresSaver manages its own connection pool internally.
-    saver_cm = AsyncPostgresSaver.from_conn_string(os.environ['ASYNC_DATABASE_URL'])
+    saver_cm = AsyncPostgresSaver.from_conn_string(os.environ["ASYNC_DATABASE_URL"])
     checkpointer = await saver_cm.__aenter__()
 
     ctx["checkpointer_cm"] = saver_cm
@@ -79,79 +84,181 @@ async def on_shutdown(ctx: dict) -> None:
         await saver_cm.__aexit__(None, None, None)
 
 
-async def process_ticket(ctx: dict, ticket_id: int) -> None:
-    """Enqueued when a ticket is created. Runs the graph from scratch."""
-    graph = ctx["graph"]
+def _restore_saved_output(ticket_id: int) -> bool:
+    """Restore an already persisted outcome instead of generating another draft."""
+    with SessionLocal() as db:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is None:
+            return True
+        if db.query(TicketResolution).filter_by(ticket_id=ticket_id).first():
+            if ticket.status != TicketStatus.RESOLVED:
+                ticket.status = TicketStatus.RESOLVED
+                event = TicketEvent(
+                    ticket_id=ticket_id,
+                    event_type=TicketEventType.RESOLVED,
+                    payload={"reason": "Recovered saved resolution"},
+                )
+                db.add(event)
+                db.commit()
+                publish_persisted_events([event])
+            return True
+        draft = (
+            db.query(AgentDraft)
+            .filter_by(ticket_id=ticket_id, status=DraftStatus.PENDING_REVIEW)
+            .first()
+        )
+        if draft:
+            if ticket.status != TicketStatus.AWAITING_APPROVAL:
+                ticket.status = TicketStatus.AWAITING_APPROVAL
+                event = TicketEvent(
+                    ticket_id=ticket_id,
+                    event_type=TicketEventType.AWAITING_APPROVAL,
+                    payload={"reason": "Recovered saved draft", "draft_id": draft.id},
+                )
+                db.add(event)
+                db.commit()
+                publish_persisted_events([event])
+            return True
+        return ticket.status in (
+            TicketStatus.RESOLVED,
+            TicketStatus.AWAITING_APPROVAL,
+            TicketStatus.NEEDS_MANUAL_REVIEW,
+        )
 
-    ticket = await asyncio.to_thread(_fetch_ticket, ticket_id)
-    if ticket is None:
-        # Ticket was deleted between enqueue and pickup — nothing to do.
-        return
 
-    initial_state: AgentState = {
-        "ticket_id": ticket["id"],
-        "ticket_text": ticket["description"],
-        "category": None,
-        "priority": None,
-        "tool_calls_made": [],
-        "context": [],
-        "next_action": None,
-        "clarification_question": None,
-        "clarification_answer": None,
-        "analysis": None,
-        "draft_text": None,
-    }
-
-    # AgentState.ticket_id is an int, but LangGraph's checkpointer expects
-    # thread_id as a string.
-    config = {"configurable": {"thread_id": str(ticket_id)}}
-    try:
-        result = await graph.ainvoke(initial_state, config=config)
-    except Exception:
-        await asyncio.to_thread(_mark_failed, ticket_id)
-        raise
-    if '__interrupt__' in result:
-        return
-    
-    await asyncio.to_thread(
-        _save_draft,
-        ticket_id, 
-        result
-    )
-
-
-async def resume_ticket(ctx: dict, ticket_id: int, human_feedback: str) -> None:
-    """Enqueued when an employee submits feedback for a ticket that's
-    paused on human_interrupt_node. Resumes the SAME thread_id."""
-    graph = ctx["graph"]
-    config = {"configurable": {"thread_id": str(ticket_id)}}
-    try:
-        result = await graph.ainvoke(Command(resume=human_feedback), config=config)
-    except Exception:
-        await asyncio.to_thread(_mark_failed, ticket_id)
-        raise
-    if '__interrupt__' in result:
-        return 
-    await asyncio.to_thread(
-        _save_draft,
-        ticket_id,
-        result
-    )
-
-def _mark_failed(ticket_id: int) -> None:
+def _record_status(ticket_id, ticket_status, event_type, payload):
     with SessionLocal() as db:
         ticket = db.get(Ticket, ticket_id)
         if ticket is None:
             return
+        ticket.status = ticket_status
+        event = TicketEvent(ticket_id=ticket_id, event_type=event_type, payload=payload)
+        db.add(event)
+        db.commit()
+        publish_persisted_events([event])
+
+
+async def process_ticket(ctx: dict, ticket_id: int) -> None:
+    """Run a new ticket, or continue an interrupted checkpoint without replaying input."""
+    async with ticket_run(ticket_id) as acquired:
+        if not acquired:
+            return  # Another worker already owns this ticket.
+        ticket = await asyncio.to_thread(_fetch_ticket, ticket_id)
+        if ticket is None or await asyncio.to_thread(_restore_saved_output, ticket_id):
+            return
+        graph = ctx["graph"]
+        config = {"configurable": {"thread_id": str(ticket_id)}}
+        try:
+            snapshot = await graph.aget_state(config)
+            # A paused human question must not be answered automatically.
+            if snapshot.interrupts:
+                question = snapshot.values.get("clarification_question")
+                await asyncio.to_thread(
+                    _record_status,
+                    ticket_id,
+                    TicketStatus.AWAITING_CLARIFICATION,
+                    TicketEventType.CLARIFICATION_REQUESTED,
+                    {"question": question, "reason": "Recovered saved clarification"},
+                )
+                return
+            if ticket["status"] == TicketStatus.AWAITING_CLARIFICATION:
+                return
+            if (
+                snapshot.values
+                and not snapshot.next
+                and snapshot.values.get("draft_text")
+            ):
+                await asyncio.to_thread(_save_draft, ticket_id, snapshot.values)
+                return
+            if snapshot.next:
+                # Passing initial input again would append duplicate reducer context.
+                graph_input = None
+                await asyncio.to_thread(
+                    _record_status,
+                    ticket_id,
+                    TicketStatus.PROCESSING,
+                    TicketEventType.PROCESSING_STARTED,
+                    {"reason": "Continuing saved progress"},
+                )
+            elif snapshot.values:
+                # No remaining work and no draft: keep this visible for human handling.
+                await asyncio.to_thread(_mark_failed, ticket_id)
+                return
+            else:
+                graph_input: AgentState = {
+                    "ticket_id": ticket_id,
+                    "ticket_text": ticket["description"],
+                    "category": None,
+                    "priority": None,
+                    "tool_calls_made": [],
+                    "context": [],
+                    "next_action": None,
+                    "clarification_question": None,
+                    "clarification_answer": None,
+                    "analysis": None,
+                    "draft_text": None,
+                }
+            result = await graph.ainvoke(graph_input, config=config)
+            if "__interrupt__" not in result:
+                await asyncio.to_thread(_save_draft, ticket_id, result)
+        except Exception:
+            await asyncio.to_thread(_mark_failed, ticket_id)
+            raise
+        except asyncio.CancelledError:
+            # ARQ timeouts and orderly shutdowns should leave a recoverable state.
+            await asyncio.to_thread(_mark_failed, ticket_id)
+            raise
+
+
+async def resume_ticket(ctx: dict, ticket_id: int, human_feedback: str) -> None:
+    """Resume the same thread after an explicit human answer."""
+    async with ticket_run(ticket_id) as acquired:
+        if not acquired:
+            # A fast answer can arrive while the interrupting job is releasing its lease.
+            raise Retry(defer=1)
+        if await asyncio.to_thread(_restore_saved_output, ticket_id):
+            return
+        graph = ctx["graph"]
+        config = {"configurable": {"thread_id": str(ticket_id)}}
+        try:
+            snapshot = await graph.aget_state(config)
+            if not snapshot.interrupts:
+                return  # Ignore duplicate or outdated clarification jobs.
+            result = await graph.ainvoke(Command(resume=human_feedback), config=config)
+            if "__interrupt__" not in result:
+                await asyncio.to_thread(_save_draft, ticket_id, result)
+        except Exception:
+            await asyncio.to_thread(_mark_failed, ticket_id)
+            raise
+        except asyncio.CancelledError:
+            await asyncio.to_thread(_mark_failed, ticket_id)
+            raise
+
+
+def _mark_failed(ticket_id: int) -> None:
+    with SessionLocal() as db:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is None or ticket.status in (
+            TicketStatus.RESOLVED,
+            TicketStatus.AWAITING_APPROVAL,
+        ):
+            return
         ticket.status = TicketStatus.FAILED
-        event = TicketEvent(ticket_id=ticket_id, event_type=TicketEventType.FAILED,
-                            payload={"message": "The agent could not complete this ticket. Please review it manually."})
+        event = TicketEvent(
+            ticket_id=ticket_id,
+            event_type=TicketEventType.FAILED,
+            payload={
+                "message": "The agent could not complete this ticket. Please review it manually."
+            },
+        )
         db.add(event)
         db.commit()
         publish_persisted_events([event])
 
 
 def _save_draft(ticket_id: int, result: dict) -> None:
+    if _restore_saved_output(ticket_id):
+        return
     db = SessionLocal()
     try:
         draft = AgentDraft(
@@ -167,10 +274,7 @@ def _save_draft(ticket_id: int, result: dict) -> None:
             TicketEvent(
                 ticket_id=ticket_id,
                 event_type=TicketEventType.DRAFT_CREATED,
-                payload={
-                    "draft_id": draft.id,
-                    "draft_content": result['draft_text']
-                },
+                payload={"draft_id": draft.id, "draft_content": result["draft_text"]},
             )
         )
         events.append(
@@ -180,12 +284,12 @@ def _save_draft(ticket_id: int, result: dict) -> None:
                 payload={
                     "draft_id": draft.id,
                 },
-            ) 
+            )
         )
         ticket = db.get(Ticket, ticket_id)
         if ticket:
             ticket.status = TicketStatus.AWAITING_APPROVAL
-            
+
         db.add_all(events)
         db.commit()
         publish_persisted_events(events)
@@ -197,7 +301,7 @@ def _save_draft(ticket_id: int, result: dict) -> None:
 
     finally:
         db.close()
-        
+
 
 class WorkerSettings:
     functions = [process_ticket, resume_ticket]
@@ -205,4 +309,4 @@ class WorkerSettings:
     on_shutdown = on_shutdown
     redis_settings = REDIS_SETTINGS
     max_jobs = 2
-    job_timeout = 300  # seconds — LLM calls + retrieval can be slow
+    job_timeout = JOB_TIMEOUT_SECONDS  # seconds — LLM calls + retrieval can be slow
